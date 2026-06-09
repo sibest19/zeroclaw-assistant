@@ -1,9 +1,9 @@
 {
-  "name": "zeroclaw-ingester",
+  "name": "zeroclaw-comms",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Message archive ingester + MCP server for the ZeroClaw personal assistant (Option C). Keeps ZeroClaw vanilla; ingests WhatsApp + email into a dedicated SQLite archive and exposes it over MCP.",
+  "description": "Message archive comms + MCP server for the ZeroClaw personal assistant (Option C). Keeps ZeroClaw vanilla; ingests WhatsApp + email into a dedicated SQLite archive and exposes it over MCP.",
   "engines": {
     "node": ">=20"
   },

@@ -44,7 +44,7 @@ git add vendor/zeroclaw && git commit -m "bump zeroclaw a <ref>"
 
 Lo schema config si **auto-migra** in avanti al caricamento; `doctor` segnala in modo
 esplicito ogni incompatibilità. Rollback = `git -C vendor/zeroclaw checkout <vecchio>` +
-rebuild. Tieni un backup di `ingester/data/` e `zc-data/` prima di salti grandi.
+rebuild. Tieni un backup di `comms/data/` e `zc-data/` prima di salti grandi.
 
 ## Note sul nostro build (`Dockerfile.zeroclaw`)
 
@@ -63,10 +63,10 @@ rebuild. Tieni un backup di `ingester/data/` e `zc-data/` prima di salti grandi.
 
 ## L'unico altro punto custom: il calendario
 
-Se attiverai il calendario via CLI `gws`, vivrà nel `Dockerfile` dell'ingester o in un
+Se attiverai il calendario via CLI `gws`, vivrà nel `Dockerfile` del servizio comms o in un
 MCP dedicato — sempre fuori dall'upstream. Da fare quando ci arriviamo.
 
 ## Cosa NON committare
 
 Vedi `deploy/.gitignore`: `.env`, `**/auth-profiles.json` (token Codex), `**/*.db`
-(archivio/sessioni), `**/wa-auth`, `zc-data/`, `ingester/data/`, `node_modules`.
+(archivio/sessioni), `**/wa-auth`, `zc-data/`, `comms/data/`, `node_modules`.

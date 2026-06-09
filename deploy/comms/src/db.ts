@@ -1,5 +1,5 @@
-// Dedicated message archive (SQLite + FTS5). Shared by the ingester (writer)
-// and the MCP server (reader). WAL mode lets the always-on ingester write while
+// Dedicated message archive (SQLite + FTS5). Shared by the comms (writer)
+// and the MCP server (reader). WAL mode lets the always-on comms write while
 // the MCP server reads concurrently.
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";

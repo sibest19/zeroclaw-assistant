@@ -15,7 +15,7 @@
 # Directory di stato per-servizio (volumi montati)
 data/
 zc-data/
-ingester/data/
+comms/data/
 
 # Scratch del run nativo di test (chiave .secret_key, stato, sessioni, config locale).
 # La persona è versionata in deploy/IDENTITY.md, non qui.

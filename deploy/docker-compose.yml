@@ -1,12 +1,12 @@
 # ZeroClaw assistant — full stack: agent (Telegram + Codex + MCP client) +
-# ingester (WhatsApp archive + local embeddings + MCP server). They talk over the
-# compose network: ZeroClaw → http://ingester:8765/mcp.
+# comms (WhatsApp archive + local embeddings + MCP server). They talk over the
+# compose network: ZeroClaw → http://comms:8765/mcp.
 #
 # Avvio:
 #   ./setup-zc-data.sh           # popola zc-data (config + persona + auth Codex)
 #   cp .env.example .env         # se non l'hai già fatto; metti il bot token
 #   docker compose up -d
-#   docker compose logs -f ingester   # scansiona il QR WhatsApp (solo primo avvio)
+#   docker compose logs -f comms   # scansiona il QR WhatsApp (solo primo avvio)
 
 services:
   # ASR locale (parakeet-tdt-0.6b-v3 via NeMo, CPU) per trascrivere i vocali.
@@ -31,11 +31,11 @@ services:
       retries: 5
       start_period: 600s # primo avvio: scarica + carica il modello (lento su CPU)
 
-  ingester:
+  comms:
     build:
-      context: ./ingester
-    image: zeroclaw-ingester:local
-    container_name: zeroclaw-ingester
+      context: ./comms
+    image: zeroclaw-comms:local
+    container_name: zeroclaw-comms
     restart: unless-stopped
     environment:
       # Trascrizione vocali via il servizio transcriber (rete compose).
@@ -43,7 +43,7 @@ services:
     volumes:
       # Riusa archivio + sessione WhatsApp già esistenti (niente re-pairing/re-sync).
       # Contiene anche models/ (cache del modello di embedding).
-      - ./ingester/data:/data
+      - ./comms/data:/data
     healthcheck:
       test:
         [
@@ -67,7 +67,7 @@ services:
     container_name: zeroclaw
     restart: unless-stopped
     depends_on:
-      ingester:
+      comms:
         condition: service_healthy # attende che l'MCP sia su prima di connettersi
     env_file:
       - .env # secret (bot token, ecc.) come env-override

@@ -1,6 +1,6 @@
 // MCP-only entry: opens the archive READ-ONLY and serves MCP over HTTP, with the
 // semantic index loaded from existing embeddings. Use to test MCP↔ZeroClaw
-// without running the full ingester. (No embed loop — read-only.)
+// without running the full comms. (No embed loop — read-only.)
 import Database from "better-sqlite3";
 import { ARCHIVE_DB } from "./config.js";
 import { startMcpHttp } from "./mcp-server.js";

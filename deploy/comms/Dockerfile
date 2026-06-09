@@ -17,7 +17,7 @@ COPY tsconfig.json ./
 COPY src ./src
 
 # Data + model cache live on a mounted volume.
-ENV INGESTER_DATA_DIR=/data
+ENV COMMS_DATA_DIR=/data
 ENV MODEL_CACHE_DIR=/data/models
 # Bind MCP on all interfaces so the zeroclaw container can reach it over the
 # compose network (NOT just container-localhost).
