@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Assemble the ZeroClaw container volume (zc-data) from versioned sources + the
-# Codex auth profile already created natively. Re-run after editing config/persona.
+# Assemble the ZeroClaw container volume (zc-data) from versioned sources.
+# Re-run after editing config.toml / IDENTITY.md / sops.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -14,16 +14,14 @@ rsync -a --delete sops/ "$ZC/workspace/sops/" 2>/dev/null || cp -R sops/. "$ZC/w
 # Persona (agent identity document) — versionata in deploy/IDENTITY.md
 cp IDENTITY.md "$ZC/.zeroclaw/agents/assistant/workspace/IDENTITY.md"
 
-# Codex auth profile: NON è versionato (segreto). Riusa quello esistente se c'è
-# (native/ in dev, o un file fornito sul server), altrimenti: 'zeroclaw auth login'
-# dentro il container.
+# Codex auth: NON versionato (segreto), vive solo in zc-data/.zeroclaw/
+# (auth-profiles.json cifrato + .secret_key). Su una macchina nuova non c'è:
+# fai login UNA volta dentro il container.
 if [ -f "$ZC/.zeroclaw/auth-profiles.json" ]; then
   echo "✓ auth Codex già presente in zc-data"
-elif [ -f native/.zeroclaw/auth-profiles.json ]; then
-  cp native/.zeroclaw/auth-profiles.json "$ZC/.zeroclaw/auth-profiles.json"
-  echo "✓ auth Codex riusata da native/"
 else
-  echo "⚠ nessun auth-profiles.json — esegui 'docker compose exec zeroclaw zeroclaw auth login --model-provider openai-codex'"
+  echo "⚠ auth Codex assente — dopo 'docker compose up -d' esegui:"
+  echo "   docker compose exec -it zeroclaw zeroclaw auth login --model-provider openai-codex --device-code"
 fi
 
 echo "✓ zc-data pronto"
