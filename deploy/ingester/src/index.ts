@@ -37,7 +37,10 @@ startMcpHttp(db, MCP_PORT, MCP_HOST, index);
         continue;
       }
       const vecs = await embedPassages(batch.map((b) => b.body));
-      storeEmbeddings(db, batch.map((b, i) => ({ rowid: b.rowid, vec: vecToBlob(vecs[i]) })));
+      storeEmbeddings(
+        db,
+        batch.map((b, i) => ({ rowid: b.rowid, vec: vecToBlob(vecs[i]) })),
+      );
       for (let i = 0; i < batch.length; i++) index.add(batch[i].rowid, vecs[i]);
       if (index.size() % (EMBED_BATCH * 10) === 0) console.log(`embedded so far: ${index.size()}`);
     } catch (e) {

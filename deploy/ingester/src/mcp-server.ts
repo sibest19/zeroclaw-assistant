@@ -7,13 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type Database from "better-sqlite3";
-import {
-  searchMessages,
-  recentChats,
-  recentMessages,
-  getThread,
-  type MessageRow,
-} from "./db.js";
+import { searchMessages, recentChats, recentMessages, getThread, type MessageRow } from "./db.js";
 import type { VectorIndex } from "./vector-index.js";
 
 const HOURS = 3_600_000;
@@ -28,7 +22,7 @@ function ftsQuery(raw: string): string {
 function fmt(m: MessageRow): string {
   const when = new Date(m.ts).toISOString().slice(0, 16).replace("T", " ");
   const via = m.origin === "assistant" ? " (inviato via assistente)" : "";
-  const who = m.direction === "out" ? `io${via}` : (m.sender_name || m.sender || "?");
+  const who = m.direction === "out" ? `io${via}` : m.sender_name || m.sender || "?";
   const chat = m.chat_name || m.chat_id;
   const body = (m.body ?? "").replace(/\s+/g, " ").slice(0, 500);
   return `[${when}] (${chat}) ${who}: ${body}`;
@@ -124,7 +118,8 @@ export function buildMcpServer(db: Database.Database, index?: VectorIndex): McpS
   server.registerTool(
     "leggi_thread",
     {
-      description: "Ultimi messaggi di una chat specifica (per riassumere o cercare contesto). chat_id da chat_recenti/cerca.",
+      description:
+        "Ultimi messaggi di una chat specifica (per riassumere o cercare contesto). chat_id da chat_recenti/cerca.",
       inputSchema: {
         chat_id: z.string().describe("il chat_id (JID) della conversazione"),
         limit: z.number().optional().describe("quanti messaggi (default 100)"),
@@ -154,8 +149,9 @@ export function startMcpHttp(
 
   app.post("/mcp", async (req, res) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    let transport: StreamableHTTPServerTransport | undefined =
-      sessionId ? transports[sessionId] : undefined;
+    let transport: StreamableHTTPServerTransport | undefined = sessionId
+      ? transports[sessionId]
+      : undefined;
 
     if (!transport && isInitializeRequest(req.body)) {
       transport = new StreamableHTTPServerTransport({

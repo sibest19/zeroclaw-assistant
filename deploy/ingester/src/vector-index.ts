@@ -30,7 +30,8 @@ export class VectorIndex {
     if (this.vecs.length === 0) return [];
     const q = await embedQuery(query);
     const scored: Array<{ id: number; s: number }> = new Array(this.vecs.length);
-    for (let i = 0; i < this.vecs.length; i++) scored[i] = { id: this.ids[i], s: dot(q, this.vecs[i]) };
+    for (let i = 0; i < this.vecs.length; i++)
+      scored[i] = { id: this.ids[i], s: dot(q, this.vecs[i]) };
     scored.sort((a, b) => b.s - a.s);
 
     // Take a generous top slice, then optionally filter by date and trim to k.
@@ -39,7 +40,7 @@ export class VectorIndex {
     const rank = new Map(ids.map((id, i) => [id, i]));
     let msgs = messagesByRowids(this.db, ids) as Array<MessageRow & { rowid: number }>;
     if (opts.since) msgs = msgs.filter((m) => m.ts >= opts.since!);
-    msgs.sort((a, b) => (rank.get(a.rowid)! - rank.get(b.rowid)!));
+    msgs.sort((a, b) => rank.get(a.rowid)! - rank.get(b.rowid)!);
     return msgs.slice(0, k);
   }
 }
