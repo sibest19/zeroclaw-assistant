@@ -22,15 +22,17 @@ requires_openai_auth = true
 model_provider = "openai.codex"
 risk_profile   = "personal"
 runtime_profile = "personal"
-channels = ["telegram.default"]   # WhatsApp passa dall'ingester via MCP
+channels = ["telegram.default"]   # WhatsApp passa dal servizio comms via MCP
 
 [runtime_profiles.personal]
 max_tool_iterations = 25          # 10 di default causava tool_loop_exhausted
 
 [risk_profiles.personal]
 level = "supervised"
-always_ask = ["file_write", "shell"]
-# Tool di LETTURA auto-approvati; l'invio (futuro archivio__invia_*) resterà gated.
+# invia_whatsapp NON è in auto_approve → già gated a "supervised"; in always_ask
+# resta dietro conferma anche se un domani alzassi il livello a "full".
+always_ask = ["file_write", "shell", "archivio__invia_whatsapp"]
+# Tool di LETTURA auto-approvati; l'INVIO resta fuori (chiede conferma).
 auto_approve = [
   "archivio__cerca_messaggi",
   "archivio__cerca_semantica",
@@ -59,16 +61,23 @@ agents = []
 external_peers = ["12258530"]     # il tuo user id Telegram
 ignore = []
 
-# WhatsApp gestito interamente dall'ingester (lettura + invio via MCP).
+# WhatsApp gestito interamente dal servizio comms (lettura + invio via MCP).
 [channels.whatsapp.default]
 enabled = false
 
-# ─── MCP: archivio messaggi servito dall'ingester (rete compose) ───
+# Velocità: gpt-5.5 con reasoning alto è lento per chiamata, e un turno fa più
+# chiamate. "low" lo rende molto più reattivo su Telegram (qualità sufficiente
+# per triage/sintesi/bozze).
+[runtime]
+reasoning_effort = "low"
+
+# ─── MCP: archivio messaggi servito dal servizio comms (rete compose) ───
 [mcp]
 enabled = true
-deferred_loading = true
+# false = include i 6 tool direttamente (no round-trip tool_search) → meno chiamate LLM.
+deferred_loading = false
 
 [[mcp.servers]]
 name = "archivio"
 transport = "http"
-url = "http://ingester:8765/mcp"
+url = "http://comms:8765/mcp"

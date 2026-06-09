@@ -1,7 +1,7 @@
 // Ingester entrypoint (always-on service): WhatsApp ingestion + MCP server +
 // background embedding loop (keeps the semantic index up to date).
 import { openDb, getUnembedded, storeEmbeddings } from "./db.js";
-import { startWhatsApp } from "./whatsapp.js";
+import { startWhatsApp, sendWhatsApp } from "./whatsapp.js";
 import { startMcpHttp } from "./mcp-server.js";
 import { VectorIndex } from "./vector-index.js";
 import { initEmbedder, embedPassages, vecToBlob } from "./embeddings.js";
@@ -24,7 +24,8 @@ console.log("loading embedding model…");
 await initEmbedder();
 
 await startWhatsApp(db);
-startMcpHttp(db, MCP_PORT, MCP_HOST, index);
+// Outbound WhatsApp tool, exposed over MCP (gated by confirmation in ZeroClaw).
+startMcpHttp(db, MCP_PORT, MCP_HOST, index, (to, txt) => sendWhatsApp(db, to, txt));
 
 // Background: embed any message lacking a vector (initial backfill + new arrivals),
 // add to the live index. Idle-sleeps when caught up.
@@ -50,5 +51,5 @@ startMcpHttp(db, MCP_PORT, MCP_HOST, index);
   }
 })();
 
-console.log("ingester running (ingest + MCP + embeddings) — Ctrl+C to stop");
+console.log("comms running (ingest + MCP + embeddings) — Ctrl+C to stop");
 process.stdin.resume();

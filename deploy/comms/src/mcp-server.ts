@@ -32,7 +32,15 @@ function text(s: string) {
   return { content: [{ type: "text" as const, text: s }] };
 }
 
-export function buildMcpServer(db: Database.Database, index?: VectorIndex): McpServer {
+// Outbound WhatsApp sender (injected; only present in the live comms, not the
+// read-only MCP standalone). Returns the JID and the sent message id.
+export type SendWa = (to: string, text: string) => Promise<{ jid: string; id: string | null }>;
+
+export function buildMcpServer(
+  db: Database.Database,
+  index?: VectorIndex,
+  sendWa?: SendWa,
+): McpServer {
   const server = new McpServer({ name: "archivio-messaggi", version: "0.1.0" });
 
   server.registerTool(
@@ -131,6 +139,26 @@ export function buildMcpServer(db: Database.Database, index?: VectorIndex): McpS
     },
   );
 
+  if (sendWa) {
+    server.registerTool(
+      "invia_whatsapp",
+      {
+        description:
+          "INVIA un messaggio WhatsApp a un contatto per conto di Simone. Usala SOLO quando Simone lo chiede esplicitamente e dopo aver mostrato la bozza. (Richiede conferma.)",
+        inputSchema: {
+          destinatario: z
+            .string()
+            .describe("chat_id/JID (es. 39333...@s.whatsapp.net o ...@g.us) o numero con prefisso"),
+          testo: z.string().describe("il testo del messaggio da inviare"),
+        },
+      },
+      async ({ destinatario, testo }) => {
+        const r = await sendWa(destinatario, testo);
+        return text(`Inviato a ${r.jid}${r.id ? ` (id ${r.id})` : ""}.`);
+      },
+    );
+  }
+
   return server;
 }
 
@@ -141,6 +169,7 @@ export function startMcpHttp(
   port: number,
   host = "127.0.0.1",
   index?: VectorIndex,
+  sendWa?: SendWa,
 ): void {
   const app = express();
   app.use(express.json({ limit: "4mb" }));
@@ -163,7 +192,7 @@ export function startMcpHttp(
       transport.onclose = () => {
         if (transport!.sessionId) delete transports[transport!.sessionId];
       };
-      const server = buildMcpServer(db, index);
+      const server = buildMcpServer(db, index, sendWa);
       await server.connect(transport);
     }
 

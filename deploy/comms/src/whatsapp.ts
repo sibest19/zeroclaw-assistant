@@ -13,10 +13,49 @@ import makeWASocket, {
 import qrcode from "qrcode-terminal";
 import pino from "pino";
 import type Database from "better-sqlite3";
-import { insertMessage, setChatUnread, updateMessageBody, type MessageRow } from "./db.js";
+import {
+  insertMessage,
+  setChatUnread,
+  updateMessageBody,
+  recordAssistantSend,
+  type MessageRow,
+} from "./db.js";
 import { WA_AUTH_DIR, TRANSCRIBER_URL } from "./config.js";
 
 const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
+
+// Current live socket — reassigned on every (re)connect so outbound sends always
+// use a valid session even after Baileys reconnects.
+let currentSock: WASocket | null = null;
+
+// Send a WhatsApp message on Simone's behalf and record it as origin='assistant'.
+// `to` may be a JID (…@s.whatsapp.net / …@g.us) or a phone number (digits).
+export async function sendWhatsApp(
+  db: Database.Database,
+  to: string,
+  text: string,
+): Promise<{ jid: string; id: string | null }> {
+  if (!currentSock) throw new Error("WhatsApp not connected");
+  const jid = to.includes("@") ? to : `${to.replace(/\D/g, "")}@s.whatsapp.net`;
+  const sent = await currentSock.sendMessage(jid, { text });
+  const id = sent?.key?.id ?? null;
+  if (id) {
+    // Record now (origin=assistant). The echo via messages.upsert dedups on ext_id.
+    recordAssistantSend(db, {
+      ext_id: id,
+      source: "whatsapp",
+      chat_id: jid,
+      chat_name: null,
+      sender: "me",
+      sender_name: "me",
+      ts: Date.now(),
+      body: text,
+      attachments_json: null,
+      raw_json: null,
+    });
+  }
+  return { jid, id };
+}
 
 // Extract human-readable text from the many WhatsApp message shapes.
 function extractBody(msg: WAMessage): string | null {
@@ -76,6 +115,7 @@ export async function startWhatsApp(db: Database.Database): Promise<WASocket> {
     syncFullHistory: true, // pull chat history on first link
     markOnlineOnConnect: false, // stay invisible; we only observe
   });
+  currentSock = sock; // expose for outbound sends (refreshed on every reconnect)
 
   sock.ev.on("creds.update", saveCreds);
 
