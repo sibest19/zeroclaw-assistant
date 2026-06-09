@@ -29,3 +29,6 @@ zeroclaw.luks
 
 # Log
 *.log
+
+# Cache pesi del modello ASR (parakeet, ~2.4GB) — scaricato a runtime
+transcriber/models/

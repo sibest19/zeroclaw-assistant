@@ -6,14 +6,15 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  downloadMediaMessage,
   type WAMessage,
   type WASocket,
 } from "@whiskeysockets/baileys";
 import qrcode from "qrcode-terminal";
 import pino from "pino";
 import type Database from "better-sqlite3";
-import { insertMessage, setChatUnread, type MessageRow } from "./db.js";
-import { WA_AUTH_DIR } from "./config.js";
+import { insertMessage, setChatUnread, updateMessageBody, type MessageRow } from "./db.js";
+import { WA_AUTH_DIR, TRANSCRIBER_URL } from "./config.js";
 
 const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
 
@@ -78,6 +79,38 @@ export async function startWhatsApp(db: Database.Database): Promise<WASocket> {
 
   sock.ev.on("creds.update", saveCreds);
 
+  // Download a voice note, send it to the transcriber, replace its "[audio]"
+  // placeholder with the transcript (the embed loop then re-indexes it).
+  // Fire-and-forget: never blocks ingestion; failures leave the placeholder.
+  const transcribeAudio = async (msg: WAMessage): Promise<void> => {
+    const extId = msg.key.id;
+    if (!extId || !TRANSCRIBER_URL) return;
+    try {
+      const buf = (await downloadMediaMessage(
+        msg,
+        "buffer",
+        {},
+        { logger: log as any, reuploadRequest: sock.updateMediaMessage },
+      )) as Buffer;
+      const resp = await fetch(TRANSCRIBER_URL, {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: new Uint8Array(buf),
+      });
+      if (!resp.ok) {
+        log.warn(`transcribe HTTP ${resp.status} for ${extId}`);
+        return;
+      }
+      const { text } = (await resp.json()) as { text?: string };
+      if (text && text.trim()) {
+        updateMessageBody(db, "whatsapp", extId, text.trim());
+        log.info(`transcribed voice note ${extId} (${text.trim().length} chars)`);
+      }
+    } catch (e) {
+      log.warn({ err: String(e) }, `voice-note transcription failed for ${extId}`);
+    }
+  };
+
   sock.ev.on("connection.update", (u) => {
     const { connection, lastDisconnect, qr } = u;
     if (qr) {
@@ -104,7 +137,11 @@ export async function startWhatsApp(db: Database.Database): Promise<WASocket> {
     let n = 0;
     for (const msg of messages) {
       const row = toRow(msg);
-      if (row && insertMessage(db, row)) n++;
+      if (!row) continue;
+      if (!insertMessage(db, row)) continue; // dedup: skip already-seen
+      n++;
+      // New voice note → transcribe in background, replacing the "[audio]" body.
+      if (msg.message?.audioMessage && TRANSCRIBER_URL) void transcribeAudio(msg);
     }
     if (n) log.info(`ingested ${n} live message(s)`);
   });

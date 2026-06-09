@@ -24,8 +24,8 @@ export interface MessageRow {
   body?: string | null;
   attachments_json?: string | null;
   raw_json?: string | null;
-  origin?: Origin;          // default 'sync'
-  is_read?: 0 | 1 | null;   // for incoming: read by Simone? best-effort. null = unknown
+  origin?: Origin; // default 'sync'
+  is_read?: 0 | 1 | null; // for incoming: read by Simone? best-effort. null = unknown
 }
 
 const SCHEMA_VERSION = 2;
@@ -140,7 +140,9 @@ function migrate(db: Database.Database, from: number): void {
 
 // Idempotent insert (dedup on source+ext_id). Returns true if a new row landed.
 export function insertMessage(db: Database.Database, m: MessageRow): boolean {
-  const info = db.prepare(`
+  const info = db
+    .prepare(
+      `
     INSERT INTO messages
       (ext_id, source, chat_id, chat_name, sender, sender_name, direction, ts, body,
        attachments_json, raw_json, origin, is_read, ingested_at)
@@ -148,30 +150,34 @@ export function insertMessage(db: Database.Database, m: MessageRow): boolean {
       (@ext_id, @source, @chat_id, @chat_name, @sender, @sender_name, @direction, @ts, @body,
        @attachments_json, @raw_json, @origin, @is_read, @ingested_at)
     ON CONFLICT(source, ext_id) DO NOTHING
-  `).run({
-    ext_id: m.ext_id,
-    source: m.source,
-    chat_id: m.chat_id,
-    chat_name: m.chat_name ?? null,
-    sender: m.sender ?? null,
-    sender_name: m.sender_name ?? null,
-    direction: m.direction,
-    ts: m.ts,
-    body: m.body ?? null,
-    attachments_json: m.attachments_json ?? null,
-    raw_json: m.raw_json ?? null,
-    origin: m.origin ?? "sync",
-    is_read: m.is_read ?? null,
-    ingested_at: Date.now(),
-  });
+  `,
+    )
+    .run({
+      ext_id: m.ext_id,
+      source: m.source,
+      chat_id: m.chat_id,
+      chat_name: m.chat_name ?? null,
+      sender: m.sender ?? null,
+      sender_name: m.sender_name ?? null,
+      direction: m.direction,
+      ts: m.ts,
+      body: m.body ?? null,
+      attachments_json: m.attachments_json ?? null,
+      raw_json: m.raw_json ?? null,
+      origin: m.origin ?? "sync",
+      is_read: m.is_read ?? null,
+      ingested_at: Date.now(),
+    });
   if (info.changes > 0) {
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO chats (chat_id, source, name, is_group, last_ts)
       VALUES (@chat_id, @source, @name, @is_group, @ts)
       ON CONFLICT(chat_id) DO UPDATE SET
         name = COALESCE(excluded.name, chats.name),
         last_ts = MAX(COALESCE(chats.last_ts, 0), excluded.last_ts)
-    `).run({
+    `,
+    ).run({
       chat_id: m.chat_id,
       source: m.source,
       name: m.chat_name ?? null,
@@ -184,23 +190,47 @@ export function insertMessage(db: Database.Database, m: MessageRow): boolean {
 
 // Record a message the assistant sent on Simone's behalf (origin='assistant').
 // Called by the send tool; the WhatsApp echo later dedups on (source, ext_id).
-export function recordAssistantSend(db: Database.Database, m: Omit<MessageRow, "direction" | "origin">): boolean {
+export function recordAssistantSend(
+  db: Database.Database,
+  m: Omit<MessageRow, "direction" | "origin">,
+): boolean {
   return insertMessage(db, { ...m, direction: "out", origin: "assistant" });
 }
 
 // Update per-chat unread count (reliable signal from WhatsApp chat events).
 export function setChatUnread(db: Database.Database, chatId: string, unread: number): void {
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO chats (chat_id, source, is_group, unread_count)
     VALUES (@chat_id, 'whatsapp', @is_group, @unread)
     ON CONFLICT(chat_id) DO UPDATE SET unread_count = @unread
-  `).run({ chat_id: chatId, is_group: chatId.includes("@g.us") ? 1 : 0, unread });
+  `,
+  ).run({ chat_id: chatId, is_group: chatId.includes("@g.us") ? 1 : 0, unread });
+}
+
+// Replace a message body (e.g. audio placeholder -> transcript). The UPDATE
+// trigger refreshes FTS; we drop its embedding so the embed loop re-indexes the
+// new text. Returns true if the message existed.
+export function updateMessageBody(
+  db: Database.Database,
+  source: Source,
+  extId: string,
+  text: string,
+): boolean {
+  const row = db
+    .prepare("SELECT rowid FROM messages WHERE source = ? AND ext_id = ?")
+    .get(source, extId) as { rowid: number } | undefined;
+  if (!row) return false;
+  db.prepare("UPDATE messages SET body = ? WHERE rowid = ?").run(text, row.rowid);
+  db.prepare("DELETE FROM embeddings WHERE rowid = ?").run(row.rowid);
+  return true;
 }
 
 // Mark a specific message read/unread (best-effort, from receipts).
 export function markRead(db: Database.Database, source: Source, extId: string, read: 0 | 1): void {
-  db.prepare("UPDATE messages SET is_read = @read WHERE source = @source AND ext_id = @ext_id")
-    .run({ read, source, ext_id: extId });
+  db.prepare("UPDATE messages SET is_read = @read WHERE source = @source AND ext_id = @ext_id").run(
+    { read, source, ext_id: extId },
+  );
 }
 
 function ftsClause(): string {
@@ -214,27 +244,42 @@ export function searchMessages(
 ): MessageRow[] {
   const limit = opts.limit ?? 50;
   const since = opts.since ?? 0;
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT m.* FROM messages_fts f
     JOIN messages m ON m.rowid = f.rowid
     WHERE ${ftsClause()}
     ORDER BY m.ts DESC LIMIT @limit
-  `).all({ query, since, limit }) as unknown as MessageRow[];
+  `,
+    )
+    .all({ query, since, limit }) as unknown as MessageRow[];
 }
 
 export function recentChats(
   db: Database.Database,
   opts: { since?: number; limit?: number } = {},
-): Array<{ chat_id: string; name: string | null; source: string; last_ts: number; n: number; unread_count: number | null }> {
+): Array<{
+  chat_id: string;
+  name: string | null;
+  source: string;
+  last_ts: number;
+  n: number;
+  unread_count: number | null;
+}> {
   const since = opts.since ?? 0;
   const limit = opts.limit ?? 30;
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT c.chat_id, c.name, c.source, c.last_ts, c.unread_count,
            (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.chat_id AND m.ts >= @since) AS n
     FROM chats c
     WHERE c.last_ts >= @since
     ORDER BY c.last_ts DESC LIMIT @limit
-  `).all({ since, limit }) as any[];
+  `,
+    )
+    .all({ since, limit }) as any[];
 }
 
 export function recentMessages(
@@ -243,9 +288,13 @@ export function recentMessages(
 ): MessageRow[] {
   const since = opts.since ?? 0;
   const limit = opts.limit ?? 200;
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT * FROM messages WHERE ts >= @since ORDER BY ts DESC LIMIT @limit
-  `).all({ since, limit }) as unknown as MessageRow[];
+  `,
+    )
+    .all({ since, limit }) as unknown as MessageRow[];
 }
 
 export function getThread(
@@ -254,31 +303,51 @@ export function getThread(
   opts: { limit?: number } = {},
 ): MessageRow[] {
   const limit = opts.limit ?? 100;
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT * FROM messages WHERE chat_id = @chatId ORDER BY ts DESC LIMIT @limit
-  `).all({ chatId, limit }) as unknown as MessageRow[];
+  `,
+    )
+    .all({ chatId, limit }) as unknown as MessageRow[];
 }
 
 // ── Embeddings (semantic search) ───────────────────────────────────────────
 
 export function countUnembedded(db: Database.Database): number {
-  return (db.prepare(`
+  return (
+    db
+      .prepare(
+        `
     SELECT COUNT(*) c FROM messages m
     LEFT JOIN embeddings e ON e.rowid = m.rowid
     WHERE e.rowid IS NULL AND m.body IS NOT NULL AND m.body != ''
-  `).get() as { c: number }).c;
+  `,
+      )
+      .get() as { c: number }
+  ).c;
 }
 
-export function getUnembedded(db: Database.Database, limit: number): Array<{ rowid: number; body: string }> {
-  return db.prepare(`
+export function getUnembedded(
+  db: Database.Database,
+  limit: number,
+): Array<{ rowid: number; body: string }> {
+  return db
+    .prepare(
+      `
     SELECT m.rowid, m.body FROM messages m
     LEFT JOIN embeddings e ON e.rowid = m.rowid
     WHERE e.rowid IS NULL AND m.body IS NOT NULL AND m.body != ''
     LIMIT @limit
-  `).all({ limit }) as Array<{ rowid: number; body: string }>;
+  `,
+    )
+    .all({ limit }) as Array<{ rowid: number; body: string }>;
 }
 
-export function storeEmbeddings(db: Database.Database, rows: Array<{ rowid: number; vec: Buffer }>): void {
+export function storeEmbeddings(
+  db: Database.Database,
+  rows: Array<{ rowid: number; vec: Buffer }>,
+): void {
   const stmt = db.prepare("INSERT OR REPLACE INTO embeddings (rowid, vec) VALUES (@rowid, @vec)");
   const tx = db.transaction((rs: Array<{ rowid: number; vec: Buffer }>) => {
     for (const r of rs) stmt.run(r);
@@ -287,11 +356,16 @@ export function storeEmbeddings(db: Database.Database, rows: Array<{ rowid: numb
 }
 
 export function allEmbeddings(db: Database.Database): Array<{ rowid: number; vec: Buffer }> {
-  return db.prepare("SELECT rowid, vec FROM embeddings").all() as Array<{ rowid: number; vec: Buffer }>;
+  return db.prepare("SELECT rowid, vec FROM embeddings").all() as Array<{
+    rowid: number;
+    vec: Buffer;
+  }>;
 }
 
 export function messagesByRowids(db: Database.Database, rowids: number[]): MessageRow[] {
   if (rowids.length === 0) return [];
   const ph = rowids.map(() => "?").join(",");
-  return db.prepare(`SELECT * FROM messages WHERE rowid IN (${ph})`).all(...rowids) as unknown as MessageRow[];
+  return db
+    .prepare(`SELECT * FROM messages WHERE rowid IN (${ph})`)
+    .all(...rowids) as unknown as MessageRow[];
 }

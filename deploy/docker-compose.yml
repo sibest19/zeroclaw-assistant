@@ -9,22 +9,53 @@
 #   docker compose logs -f ingester   # scansiona il QR WhatsApp (solo primo avvio)
 
 services:
+  # ASR locale (parakeet-tdt-0.6b-v3 via NeMo, CPU) per trascrivere i vocali.
+  transcriber:
+    build:
+      context: ./transcriber
+    image: zeroclaw-transcriber:local
+    container_name: zeroclaw-transcriber
+    restart: unless-stopped
+    volumes:
+      - ./transcriber/models:/models # cache pesi modello (~2.4GB, scaricati una volta)
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8770/health').read() else 1)",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 600s # primo avvio: scarica + carica il modello (lento su CPU)
+
   ingester:
     build:
       context: ./ingester
     image: zeroclaw-ingester:local
     container_name: zeroclaw-ingester
     restart: unless-stopped
+    environment:
+      # Trascrizione vocali via il servizio transcriber (rete compose).
+      TRANSCRIBER_URL: "http://transcriber:8770/transcribe"
     volumes:
       # Riusa archivio + sessione WhatsApp già esistenti (niente re-pairing/re-sync).
       # Contiene anche models/ (cache del modello di embedding).
       - ./ingester/data:/data
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:8765/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:8765/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 40s   # primo avvio: può scaricare il modello
+      start_period: 40s # primo avvio: può scaricare il modello
 
   zeroclaw:
     # Build dal submodule upstream (vendor/zeroclaw, pinnato) col NOSTRO Dockerfile.
@@ -37,10 +68,10 @@ services:
     restart: unless-stopped
     depends_on:
       ingester:
-        condition: service_healthy   # attende che l'MCP sia su prima di connettersi
+        condition: service_healthy # attende che l'MCP sia su prima di connettersi
     env_file:
-      - .env                          # secret (bot token, ecc.) come env-override
+      - .env # secret (bot token, ecc.) come env-override
     volumes:
-      - ./zc-data:/zeroclaw-data      # config + persona + auth Codex + memoria
+      - ./zc-data:/zeroclaw-data # config + persona + auth Codex + memoria
     # Gateway non esposto (usiamo Telegram in long-polling). Per la dashboard:
     # ports: ["127.0.0.1:42617:42617"]  # + ENV ZEROCLAW_BIND=0.0.0.0

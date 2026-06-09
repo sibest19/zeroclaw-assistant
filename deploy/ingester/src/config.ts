@@ -13,3 +13,6 @@ export const ARCHIVE_DB = process.env.INGESTER_ARCHIVE_DB ?? join(DATA_DIR, "arc
 
 // Where the WhatsApp (Baileys) auth/session state lives (phase 2).
 export const WA_AUTH_DIR = process.env.INGESTER_WA_AUTH_DIR ?? join(DATA_DIR, "wa-auth");
+
+// Transcriber service (parakeet). Empty = transcription disabled (audio stays "[audio]").
+export const TRANSCRIBER_URL = process.env.TRANSCRIBER_URL ?? "";
