@@ -1,0 +1,17 @@
+[sop]
+name = "daily-brief"
+description = "Riepilogo giornaliero del mattino: cosa è arrivato durante la notte e cosa richiede azione oggi."
+version = "1.0.0"
+priority = "high"
+# auto: recap diretto a Simone su Telegram → nessuna conferma per inviarlo.
+execution_mode = "auto"
+cooldown_secs = 3600
+max_concurrent = 1
+
+# Ogni mattina alle 07:30 (cron 6 campi: sec min ora giorno mese dow).
+[[triggers]]
+type = "cron"
+expression = "0 30 7 * * *"
+
+[[triggers]]
+type = "manual"

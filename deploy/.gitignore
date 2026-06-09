@@ -1,0 +1,31 @@
+# Segreti — MAI committare
+.env
+# token OAuth Codex/Anthropic
+**/auth-profiles.json
+
+# Dati privati e stato: DB (archivio messaggi, devices, sessioni)
+**/*.db
+**/*.db-shm
+**/*.db-wal
+
+# Sessioni WhatsApp
+**/wa-auth/
+**/whatsapp-web/
+
+# Directory di stato per-servizio (volumi montati)
+data/
+zc-data/
+ingester/data/
+
+# Scratch del run nativo di test (chiave .secret_key, stato, sessioni, config locale).
+# La persona è versionata in deploy/IDENTITY.md, non qui.
+native/
+
+# Dipendenze
+**/node_modules/
+
+# Volume cifrato LUKS (vedi SETUP.md)
+zeroclaw.luks
+
+# Log
+*.log

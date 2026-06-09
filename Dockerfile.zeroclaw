@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1
+# Builds the ZeroClaw `zeroclaw` binary from the pinned upstream submodule
+# (build context = vendor/zeroclaw). We do NOT touch upstream files: a plain
+# full-source build of just the binary. `--bin zeroclaw` skips the GUI/aux apps
+# (tauri, zerocode) and examples, so no stubbing is needed; all workspace
+# manifests + locales.toml are present in the full context.
+FROM rust:1.94-slim AS builder
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# The release profile uses lto = "fat" (needs ~12-16GB RAM, OOMs smaller VMs).
+# Disable LTO for the container build — far less memory, faster, slightly larger
+# binary. Overrides Cargo.toml at build time only.
+ENV CARGO_PROFILE_RELEASE_LTO=off
+ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+
+COPY . .
+# Cache mounts keep deps compiled across rebuilds. The target/ is a cache mount,
+# so copy the binary OUT within the same RUN before the mount detaches.
+RUN --mount=type=cache,id=zca-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=zca-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=zca-target,target=/app/target,sharing=locked \
+    cargo build --release --locked --bin zeroclaw \
+    && cp target/release/zeroclaw /usr/local/bin/zeroclaw \
+    && strip /usr/local/bin/zeroclaw
+
+# ── Runtime ─────────────────────────────────────────────────────────────────
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/bin/zeroclaw /usr/local/bin/zeroclaw
+RUN mkdir -p /zeroclaw-data/data && chown -R 65534:65534 /zeroclaw-data
+
+ENV LANG=C.UTF-8
+ENV HOME=/zeroclaw-data
+ENV ZEROCLAW_DATA_DIR=/zeroclaw-data/data
+
+WORKDIR /zeroclaw-data
+USER 65534:65534
+EXPOSE 42617
+HEALTHCHECK --interval=60s --timeout=10s --retries=3 --start-period=20s \
+    CMD ["zeroclaw", "status", "--format=exit-code"]
+ENTRYPOINT ["zeroclaw"]
+CMD ["daemon"]

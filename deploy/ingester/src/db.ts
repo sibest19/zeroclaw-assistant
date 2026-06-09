@@ -1,0 +1,297 @@
+// Dedicated message archive (SQLite + FTS5). Shared by the ingester (writer)
+// and the MCP server (reader). WAL mode lets the always-on ingester write while
+// the MCP server reads concurrently.
+import Database from "better-sqlite3";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { ARCHIVE_DB } from "./config.js";
+
+export type Source = "whatsapp" | "email";
+export type Direction = "in" | "out";
+// 'sync'      = captured from WhatsApp/IMAP (incoming, or sent by Simone elsewhere)
+// 'assistant' = sent on Simone's behalf BY this assistant (via OpenClaw/MCP)
+export type Origin = "sync" | "assistant";
+
+export interface MessageRow {
+  ext_id: string;
+  source: Source;
+  chat_id: string;
+  chat_name?: string | null;
+  sender?: string | null;
+  sender_name?: string | null;
+  direction: Direction;
+  ts: number;
+  body?: string | null;
+  attachments_json?: string | null;
+  raw_json?: string | null;
+  origin?: Origin;          // default 'sync'
+  is_read?: 0 | 1 | null;   // for incoming: read by Simone? best-effort. null = unknown
+}
+
+const SCHEMA_VERSION = 2;
+// FTS5 tokenizer: fold diacritics so "perche" matches "perché", etc. (Italian).
+const FTS_TOKENIZER = "unicode61 remove_diacritics 2";
+
+export function openDb(path: string = ARCHIVE_DB): Database.Database {
+  mkdirSync(dirname(path), { recursive: true });
+  const db = new Database(path);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+  initSchema(db);
+  return db;
+}
+
+function columnExists(db: Database.Database, table: string, col: string): boolean {
+  return (db.pragma(`table_info(${table})`) as Array<{ name: string }>).some((c) => c.name === col);
+}
+
+function ftsHasDiacritics(db: Database.Database): boolean {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE name='messages_fts'").get() as
+    | { sql: string }
+    | undefined;
+  return !!row && /remove_diacritics/.test(row.sql);
+}
+
+function initSchema(db: Database.Database): void {
+  // Fresh DBs get the full v2 shape directly; existing DBs are migrated below.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS messages (
+      rowid            INTEGER PRIMARY KEY,
+      ext_id           TEXT NOT NULL,
+      source           TEXT NOT NULL,
+      chat_id          TEXT NOT NULL,
+      chat_name        TEXT,
+      sender           TEXT,
+      sender_name      TEXT,
+      direction        TEXT NOT NULL,
+      ts               INTEGER NOT NULL,
+      body             TEXT,
+      attachments_json TEXT,
+      raw_json         TEXT,
+      origin           TEXT NOT NULL DEFAULT 'sync',
+      is_read          INTEGER,
+      ingested_at      INTEGER NOT NULL,
+      UNIQUE(source, ext_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages(chat_id, ts);
+    CREATE INDEX IF NOT EXISTS idx_messages_ts      ON messages(ts);
+
+    CREATE TABLE IF NOT EXISTS chats (
+      chat_id      TEXT PRIMARY KEY,
+      source       TEXT NOT NULL,
+      name         TEXT,
+      is_group     INTEGER NOT NULL DEFAULT 0,
+      last_ts      INTEGER,
+      unread_count INTEGER
+    );
+
+    -- One embedding vector per message body (rowid = messages.rowid). Stored as
+    -- a Float32 BLOB; the in-memory index brute-forces cosine for KNN.
+    CREATE TABLE IF NOT EXISTS embeddings (
+      rowid INTEGER PRIMARY KEY,
+      vec   BLOB NOT NULL
+    );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+      body, content='messages', content_rowid='rowid', tokenize='${FTS_TOKENIZER}'
+    );
+    CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+      INSERT INTO messages_fts(rowid, body) VALUES (new.rowid, new.body);
+    END;
+    CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, body) VALUES('delete', old.rowid, old.body);
+    END;
+    CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, body) VALUES('delete', old.rowid, old.body);
+      INSERT INTO messages_fts(rowid, body) VALUES (new.rowid, new.body);
+    END;
+  `);
+
+  const ver = db.pragma("user_version", { simple: true }) as number;
+  if (ver < SCHEMA_VERSION) migrate(db, ver);
+}
+
+function migrate(db: Database.Database, from: number): void {
+  db.transaction(() => {
+    // v1 → v2: new columns on existing tables + better FTS tokenizer.
+    if (!columnExists(db, "messages", "origin")) {
+      db.exec("ALTER TABLE messages ADD COLUMN origin TEXT NOT NULL DEFAULT 'sync'");
+    }
+    if (!columnExists(db, "messages", "is_read")) {
+      db.exec("ALTER TABLE messages ADD COLUMN is_read INTEGER");
+    }
+    if (!columnExists(db, "chats", "unread_count")) {
+      db.exec("ALTER TABLE chats ADD COLUMN unread_count INTEGER");
+    }
+    // origin column now guaranteed to exist (fresh or migrated) → safe to index.
+    db.exec("CREATE INDEX IF NOT EXISTS idx_messages_origin ON messages(origin)");
+    if (!ftsHasDiacritics(db)) {
+      db.exec(`
+        DROP TABLE IF EXISTS messages_fts;
+        CREATE VIRTUAL TABLE messages_fts USING fts5(
+          body, content='messages', content_rowid='rowid', tokenize='${FTS_TOKENIZER}'
+        );
+        INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
+      `);
+    }
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  })();
+}
+
+// Idempotent insert (dedup on source+ext_id). Returns true if a new row landed.
+export function insertMessage(db: Database.Database, m: MessageRow): boolean {
+  const info = db.prepare(`
+    INSERT INTO messages
+      (ext_id, source, chat_id, chat_name, sender, sender_name, direction, ts, body,
+       attachments_json, raw_json, origin, is_read, ingested_at)
+    VALUES
+      (@ext_id, @source, @chat_id, @chat_name, @sender, @sender_name, @direction, @ts, @body,
+       @attachments_json, @raw_json, @origin, @is_read, @ingested_at)
+    ON CONFLICT(source, ext_id) DO NOTHING
+  `).run({
+    ext_id: m.ext_id,
+    source: m.source,
+    chat_id: m.chat_id,
+    chat_name: m.chat_name ?? null,
+    sender: m.sender ?? null,
+    sender_name: m.sender_name ?? null,
+    direction: m.direction,
+    ts: m.ts,
+    body: m.body ?? null,
+    attachments_json: m.attachments_json ?? null,
+    raw_json: m.raw_json ?? null,
+    origin: m.origin ?? "sync",
+    is_read: m.is_read ?? null,
+    ingested_at: Date.now(),
+  });
+  if (info.changes > 0) {
+    db.prepare(`
+      INSERT INTO chats (chat_id, source, name, is_group, last_ts)
+      VALUES (@chat_id, @source, @name, @is_group, @ts)
+      ON CONFLICT(chat_id) DO UPDATE SET
+        name = COALESCE(excluded.name, chats.name),
+        last_ts = MAX(COALESCE(chats.last_ts, 0), excluded.last_ts)
+    `).run({
+      chat_id: m.chat_id,
+      source: m.source,
+      name: m.chat_name ?? null,
+      is_group: m.chat_id.includes("@g.us") ? 1 : 0,
+      ts: m.ts,
+    });
+  }
+  return info.changes > 0;
+}
+
+// Record a message the assistant sent on Simone's behalf (origin='assistant').
+// Called by the send tool; the WhatsApp echo later dedups on (source, ext_id).
+export function recordAssistantSend(db: Database.Database, m: Omit<MessageRow, "direction" | "origin">): boolean {
+  return insertMessage(db, { ...m, direction: "out", origin: "assistant" });
+}
+
+// Update per-chat unread count (reliable signal from WhatsApp chat events).
+export function setChatUnread(db: Database.Database, chatId: string, unread: number): void {
+  db.prepare(`
+    INSERT INTO chats (chat_id, source, is_group, unread_count)
+    VALUES (@chat_id, 'whatsapp', @is_group, @unread)
+    ON CONFLICT(chat_id) DO UPDATE SET unread_count = @unread
+  `).run({ chat_id: chatId, is_group: chatId.includes("@g.us") ? 1 : 0, unread });
+}
+
+// Mark a specific message read/unread (best-effort, from receipts).
+export function markRead(db: Database.Database, source: Source, extId: string, read: 0 | 1): void {
+  db.prepare("UPDATE messages SET is_read = @read WHERE source = @source AND ext_id = @ext_id")
+    .run({ read, source, ext_id: extId });
+}
+
+function ftsClause(): string {
+  return "messages_fts MATCH @query AND m.ts >= @since";
+}
+
+export function searchMessages(
+  db: Database.Database,
+  query: string,
+  opts: { since?: number; limit?: number } = {},
+): MessageRow[] {
+  const limit = opts.limit ?? 50;
+  const since = opts.since ?? 0;
+  return db.prepare(`
+    SELECT m.* FROM messages_fts f
+    JOIN messages m ON m.rowid = f.rowid
+    WHERE ${ftsClause()}
+    ORDER BY m.ts DESC LIMIT @limit
+  `).all({ query, since, limit }) as unknown as MessageRow[];
+}
+
+export function recentChats(
+  db: Database.Database,
+  opts: { since?: number; limit?: number } = {},
+): Array<{ chat_id: string; name: string | null; source: string; last_ts: number; n: number; unread_count: number | null }> {
+  const since = opts.since ?? 0;
+  const limit = opts.limit ?? 30;
+  return db.prepare(`
+    SELECT c.chat_id, c.name, c.source, c.last_ts, c.unread_count,
+           (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.chat_id AND m.ts >= @since) AS n
+    FROM chats c
+    WHERE c.last_ts >= @since
+    ORDER BY c.last_ts DESC LIMIT @limit
+  `).all({ since, limit }) as any[];
+}
+
+export function recentMessages(
+  db: Database.Database,
+  opts: { since?: number; limit?: number } = {},
+): MessageRow[] {
+  const since = opts.since ?? 0;
+  const limit = opts.limit ?? 200;
+  return db.prepare(`
+    SELECT * FROM messages WHERE ts >= @since ORDER BY ts DESC LIMIT @limit
+  `).all({ since, limit }) as unknown as MessageRow[];
+}
+
+export function getThread(
+  db: Database.Database,
+  chatId: string,
+  opts: { limit?: number } = {},
+): MessageRow[] {
+  const limit = opts.limit ?? 100;
+  return db.prepare(`
+    SELECT * FROM messages WHERE chat_id = @chatId ORDER BY ts DESC LIMIT @limit
+  `).all({ chatId, limit }) as unknown as MessageRow[];
+}
+
+// ── Embeddings (semantic search) ───────────────────────────────────────────
+
+export function countUnembedded(db: Database.Database): number {
+  return (db.prepare(`
+    SELECT COUNT(*) c FROM messages m
+    LEFT JOIN embeddings e ON e.rowid = m.rowid
+    WHERE e.rowid IS NULL AND m.body IS NOT NULL AND m.body != ''
+  `).get() as { c: number }).c;
+}
+
+export function getUnembedded(db: Database.Database, limit: number): Array<{ rowid: number; body: string }> {
+  return db.prepare(`
+    SELECT m.rowid, m.body FROM messages m
+    LEFT JOIN embeddings e ON e.rowid = m.rowid
+    WHERE e.rowid IS NULL AND m.body IS NOT NULL AND m.body != ''
+    LIMIT @limit
+  `).all({ limit }) as Array<{ rowid: number; body: string }>;
+}
+
+export function storeEmbeddings(db: Database.Database, rows: Array<{ rowid: number; vec: Buffer }>): void {
+  const stmt = db.prepare("INSERT OR REPLACE INTO embeddings (rowid, vec) VALUES (@rowid, @vec)");
+  const tx = db.transaction((rs: Array<{ rowid: number; vec: Buffer }>) => {
+    for (const r of rs) stmt.run(r);
+  });
+  tx(rows);
+}
+
+export function allEmbeddings(db: Database.Database): Array<{ rowid: number; vec: Buffer }> {
+  return db.prepare("SELECT rowid, vec FROM embeddings").all() as Array<{ rowid: number; vec: Buffer }>;
+}
+
+export function messagesByRowids(db: Database.Database, rowids: number[]): MessageRow[] {
+  if (rowids.length === 0) return [];
+  const ph = rowids.map(() => "?").join(",");
+  return db.prepare(`SELECT * FROM messages WHERE rowid IN (${ph})`).all(...rowids) as unknown as MessageRow[];
+}

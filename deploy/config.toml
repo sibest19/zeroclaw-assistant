@@ -1,0 +1,74 @@
+schema_version = 3
+
+# Config del container ZeroClaw. Viene copiata in zc-data/.zeroclaw/config.toml
+# da setup-zc-data.sh e montata su /zeroclaw-data/.zeroclaw/config.toml.
+workspace_dir = "/zeroclaw-data/workspace"
+sops_dir = "/zeroclaw-data/workspace/sops"
+
+[gateway]
+port = 42617
+host = "127.0.0.1"            # solo dentro il container; non esposto
+allow_public_bind = false
+require_pairing = true
+
+# ─── Provider LLM: OpenAI Codex (subscription). Auth in .zeroclaw/auth-profiles.json
+#     (riusata da quella nativa via setup-zc-data.sh). gpt-5.5: vedi memoria modelli. ───
+[providers.models.openai.codex]
+model = "gpt-5.5"
+wire_api = "responses"
+requires_openai_auth = true
+
+[agents.assistant]
+model_provider = "openai.codex"
+risk_profile   = "personal"
+runtime_profile = "personal"
+channels = ["telegram.default"]   # WhatsApp passa dall'ingester via MCP
+
+[runtime_profiles.personal]
+max_tool_iterations = 25          # 10 di default causava tool_loop_exhausted
+
+[risk_profiles.personal]
+level = "supervised"
+always_ask = ["file_write", "shell"]
+# Tool di LETTURA auto-approvati; l'invio (futuro archivio__invia_*) resterà gated.
+auto_approve = [
+  "archivio__cerca_messaggi",
+  "archivio__cerca_semantica",
+  "archivio__messaggi_recenti",
+  "archivio__chat_recenti",
+  "archivio__leggi_thread",
+  "memory_recall",
+  "content_search",
+  "tool_search",
+]
+workspace_only = true
+sandbox_enabled = false           # il container È già l'isolamento; niente sandbox OS
+
+[memory]
+enabled = true
+backend = "sqlite"
+
+[channels.telegram.default]
+enabled = true
+bot_token = ""                    # ← env: ZEROCLAW_channels__telegram__default__bot_token
+approval_timeout_secs = 300
+
+[peer_groups.telegram_allow]
+channel = "telegram.default"
+agents = []
+external_peers = ["12258530"]     # il tuo user id Telegram
+ignore = []
+
+# WhatsApp gestito interamente dall'ingester (lettura + invio via MCP).
+[channels.whatsapp.default]
+enabled = false
+
+# ─── MCP: archivio messaggi servito dall'ingester (rete compose) ───
+[mcp]
+enabled = true
+deferred_loading = true
+
+[[mcp.servers]]
+name = "archivio"
+transport = "http"
+url = "http://ingester:8765/mcp"

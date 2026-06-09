@@ -1,0 +1,46 @@
+# ZeroClaw assistant — full stack: agent (Telegram + Codex + MCP client) +
+# ingester (WhatsApp archive + local embeddings + MCP server). They talk over the
+# compose network: ZeroClaw → http://ingester:8765/mcp.
+#
+# Avvio:
+#   ./setup-zc-data.sh           # popola zc-data (config + persona + auth Codex)
+#   cp .env.example .env         # se non l'hai già fatto; metti il bot token
+#   docker compose up -d
+#   docker compose logs -f ingester   # scansiona il QR WhatsApp (solo primo avvio)
+
+services:
+  ingester:
+    build:
+      context: ./ingester
+    image: zeroclaw-ingester:local
+    container_name: zeroclaw-ingester
+    restart: unless-stopped
+    volumes:
+      # Riusa archivio + sessione WhatsApp già esistenti (niente re-pairing/re-sync).
+      # Contiene anche models/ (cache del modello di embedding).
+      - ./ingester/data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8765/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s   # primo avvio: può scaricare il modello
+
+  zeroclaw:
+    # Build dal submodule upstream (vendor/zeroclaw, pinnato) col NOSTRO Dockerfile.
+    # Nessuna modifica all'upstream. Aggiornare = bump del submodule.
+    build:
+      context: ../vendor/zeroclaw
+      dockerfile: ../../Dockerfile.zeroclaw
+    image: zeroclaw:assistant
+    container_name: zeroclaw
+    restart: unless-stopped
+    depends_on:
+      ingester:
+        condition: service_healthy   # attende che l'MCP sia su prima di connettersi
+    env_file:
+      - .env                          # secret (bot token, ecc.) come env-override
+    volumes:
+      - ./zc-data:/zeroclaw-data      # config + persona + auth Codex + memoria
+    # Gateway non esposto (usiamo Telegram in long-polling). Per la dashboard:
+    # ports: ["127.0.0.1:42617:42617"]  # + ENV ZEROCLAW_BIND=0.0.0.0

@@ -1,0 +1,20 @@
+[sop]
+name = "hourly-digest"
+description = "Riassunto orario di WhatsApp ed email; evidenzia i messaggi importanti su Telegram."
+version = "1.0.0"
+priority = "normal"
+# auto: è un recap diretto a Simone (solo lui è in Telegram allowed_users), quindi
+# NON serve conferma per inviarlo. Gli invii verso terzi (WhatsApp/email) restano
+# gated dal risk_profile supervised: questa SOP non li esegue.
+execution_mode = "auto"
+cooldown_secs = 600
+max_concurrent = 1
+
+# Cron a 6 campi (sec min ora giorno mese dow). Ogni ora, al minuto 0, dalle 8 alle 22.
+[[triggers]]
+type = "cron"
+expression = "0 0 8-22 * * *"
+
+# Esecuzione manuale on-demand (tool sop_execute), utile per "fammi il punto adesso".
+[[triggers]]
+type = "manual"
