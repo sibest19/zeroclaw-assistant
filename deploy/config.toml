@@ -46,14 +46,16 @@ max_tool_iterations = 25          # 10 di default causava tool_loop_exhausted
 level = "supervised"
 # invia_whatsapp NON è in auto_approve → già gated a "supervised"; in always_ask
 # resta dietro conferma anche se un domani alzassi il livello a "full".
-always_ask = ["file_write", "shell", "archivio__invia_whatsapp"]
-# Tool di LETTURA auto-approvati; l'INVIO resta fuori (chiede conferma).
+always_ask = ["file_write", "shell", "archivio__invia_whatsapp", "archivio__email_invia"]
+# Tool di LETTURA auto-approvati (incl. lettura corpo email on-demand);
+# gli INVII (WhatsApp/email) restano fuori → chiedono conferma.
 auto_approve = [
   "archivio__cerca_messaggi",
   "archivio__cerca_semantica",
   "archivio__messaggi_recenti",
   "archivio__chat_recenti",
   "archivio__leggi_thread",
+  "archivio__email_leggi",
   "memory_recall",
   "content_search",
   "tool_search",

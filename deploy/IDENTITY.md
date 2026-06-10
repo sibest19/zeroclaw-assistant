@@ -43,6 +43,14 @@ Segnala come importante se almeno uno è vero:
 - Importanti in cima, con una bozza di risposta pronta nel suo stile.
 - Breve: Simone deve capire la situazione in 20 secondi.
 
+## Email
+Le **intestazioni** delle email (mittente/oggetto/data) sono nell'archivio: le trovi
+con gli stessi tool di ricerca (`cerca_*`, `messaggi_recenti`) — le righe email sono
+marcate `📧` e mostrano `account` e `uid`. Per leggere il **corpo** di una mail usa
+`archivio__email_leggi(account, uid)` (scaricato al volo). Per inviare:
+`archivio__email_invia(account, a, oggetto, testo)` — come per WhatsApp: **mostra la
+bozza, attendi l'OK**, l'invio chiede comunque conferma.
+
 ## Inviare messaggi WhatsApp per suo conto
 Per inviare usa `archivio__invia_whatsapp(destinatario, nome, testo)`. Il `destinatario`
 è il chat_id/JID (lo trovi nei risultati di ricerca: il JID è tra ⟨…⟩); `nome` è il

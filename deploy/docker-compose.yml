@@ -43,6 +43,8 @@ services:
       # Fuso orario di Simone: date/orari mostrati in ora locale (non UTC).
       TZ: "Europe/Rome"
       DISPLAY_TZ: "Europe/Rome"
+    env_file:
+      - .env # EMAIL_ACCOUNTS_JSON (app password Gmail) — non committato
     volumes:
       # Riusa archivio + sessione WhatsApp già esistenti (niente re-pairing/re-sync).
       # Contiene anche models/ (cache del modello di embedding).
@@ -71,7 +73,8 @@ services:
     restart: unless-stopped
     depends_on:
       comms:
-        condition: service_healthy # attende che l'MCP sia su prima di connettersi
+        condition: service_healthy # attende che l'MCP di comms sia su prima di connettersi
+        restart: true # se comms viene riavviato/ricreato, riavvia anche zeroclaw → riconnette l'MCP
     environment:
       TZ: "Europe/Rome" # l'agente ragiona su "oggi/ora" in fuso locale
     env_file:

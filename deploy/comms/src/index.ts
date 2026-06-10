@@ -1,7 +1,8 @@
-// Ingester entrypoint (always-on service): WhatsApp ingestion + MCP server +
+// comms entrypoint (always-on service): WhatsApp + email ingestion + MCP server +
 // background embedding loop (keeps the semantic index up to date).
 import { openDb, getUnembedded, storeEmbeddings, backfillChatNames } from "./db.js";
 import { startWhatsApp, sendWhatsApp } from "./whatsapp.js";
+import { startEmail, fetchEmailBody, sendEmail } from "./email.js";
 import { startMcpHttp } from "./mcp-server.js";
 import { VectorIndex } from "./vector-index.js";
 import { initEmbedder, embedPassages, vecToBlob } from "./embeddings.js";
@@ -28,8 +29,15 @@ console.log("loading embedding model…");
 await initEmbedder();
 
 await startWhatsApp(db);
-// Outbound WhatsApp tool, exposed over MCP (gated by confirmation in ZeroClaw).
-startMcpHttp(db, MCP_PORT, MCP_HOST, index, (to, txt) => sendWhatsApp(db, to, txt));
+await startEmail(db); // background IMAP header poll per account (no-op if unconfigured)
+
+// Outbound actions exposed over MCP. Sends are gated by confirmation in ZeroClaw;
+// email_leggi (on-demand body fetch) is read-only.
+startMcpHttp(db, MCP_PORT, MCP_HOST, index, {
+  sendWa: (to, txt) => sendWhatsApp(db, to, txt),
+  readEmail: (account, uid) => fetchEmailBody(account, uid),
+  sendEmail: (account, to, subject, txt) => sendEmail(account, to, subject, txt),
+});
 
 // Background: embed any message lacking a vector (initial backfill + new arrivals),
 // add to the live index. Idle-sleeps when caught up.

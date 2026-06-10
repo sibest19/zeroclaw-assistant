@@ -43,13 +43,22 @@ function ftsQuery(raw: string): string {
 
 function fmt(m: MessageRow): string {
   const when = localTime(m.ts);
+  const body = (m.body ?? "").replace(/\s+/g, " ").slice(0, 500);
+  if (m.source === "email") {
+    // Header only (body fetched on demand). Expose account+uid for email_leggi.
+    let ref = "";
+    try {
+      const r = JSON.parse(m.raw_json || "{}");
+      if (r.account && r.uid != null) ref = `  «leggi: account=${r.account} uid=${r.uid}»`;
+    } catch {}
+    return `[${when}] 📧 email da ${m.sender_name || m.sender || "?"} — oggetto: ${body}${ref}`;
+  }
   const via = m.origin === "assistant" ? " (inviato via assistente)" : "";
   const who = m.direction === "out" ? `io${via}` : m.sender_name || m.sender || "?";
   // Chat label = resolved contact/group name (from setChatName); JID as honest fallback.
   const name = m.chat_display || m.chat_id;
   // Show the JID too when a human name is displayed (agent needs it to act).
   const idref = m.chat_display ? `  ⟨${m.chat_id}⟩` : "";
-  const body = (m.body ?? "").replace(/\s+/g, " ").slice(0, 500);
   return `[${when}] (${name}) ${who}: ${body}${idref}`;
 }
 
@@ -57,15 +66,29 @@ function text(s: string) {
   return { content: [{ type: "text" as const, text: s }] };
 }
 
-// Outbound WhatsApp sender (injected; only present in the live comms, not the
-// read-only MCP standalone). Returns the JID and the sent message id.
+// Injected senders/readers (present only in the live comms, not the read-only
+// MCP standalone).
 export type SendWa = (to: string, text: string) => Promise<{ jid: string; id: string | null }>;
+export type ReadEmail = (account: string, uid: number | string) => Promise<string>;
+export type SendEmail = (
+  account: string,
+  to: string,
+  subject: string,
+  text: string,
+) => Promise<{ messageId: string; accepted: string[] }>;
+
+export interface CommsActions {
+  sendWa?: SendWa;
+  readEmail?: ReadEmail;
+  sendEmail?: SendEmail;
+}
 
 export function buildMcpServer(
   db: Database.Database,
   index?: VectorIndex,
-  sendWa?: SendWa,
+  actions: CommsActions = {},
 ): McpServer {
+  const { sendWa, readEmail, sendEmail } = actions;
   const server = new McpServer({ name: "archivio-messaggi", version: "0.1.0" });
 
   server.registerTool(
@@ -190,6 +213,44 @@ export function buildMcpServer(
     );
   }
 
+  if (readEmail) {
+    server.registerTool(
+      "email_leggi",
+      {
+        description:
+          "Scarica al volo il CORPO completo di una email (non è memorizzato). account+uid li trovi nei risultati di ricerca (righe 📧 email).",
+        inputSchema: {
+          account: z.string().describe("nome account (es. personal/work/cloud)"),
+          uid: z.union([z.number(), z.string()]).describe("uid IMAP della mail"),
+        },
+      },
+      async ({ account, uid }) => {
+        const body = await readEmail(account, uid);
+        return text(body || "(corpo vuoto)");
+      },
+    );
+  }
+
+  if (sendEmail) {
+    server.registerTool(
+      "email_invia",
+      {
+        description:
+          "INVIA una email per conto di Simone. Usala SOLO quando Simone lo chiede e dopo aver mostrato la bozza. (Richiede conferma.)",
+        inputSchema: {
+          account: z.string().describe("account mittente (es. personal/work/cloud)"),
+          a: z.string().describe("destinatario/i (indirizzo email)"),
+          oggetto: z.string(),
+          testo: z.string(),
+        },
+      },
+      async ({ account, a, oggetto, testo }) => {
+        const r = await sendEmail(account, a, oggetto, testo);
+        return text(`Inviata da ${account} a ${r.accepted.join(", ") || a} (id ${r.messageId}).`);
+      },
+    );
+  }
+
   return server;
 }
 
@@ -200,7 +261,7 @@ export function startMcpHttp(
   port: number,
   host = "127.0.0.1",
   index?: VectorIndex,
-  sendWa?: SendWa,
+  actions: CommsActions = {},
 ): void {
   const app = express();
   app.use(express.json({ limit: "4mb" }));
@@ -223,7 +284,7 @@ export function startMcpHttp(
       transport.onclose = () => {
         if (transport!.sessionId) delete transports[transport!.sessionId];
       };
-      const server = buildMcpServer(db, index, sendWa);
+      const server = buildMcpServer(db, index, actions);
       await server.connect(transport);
     }
 
