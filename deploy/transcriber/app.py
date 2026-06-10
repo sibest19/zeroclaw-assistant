@@ -1,11 +1,14 @@
-"""Local ASR service — parakeet-tdt-0.6b-v3 (NeMo, CPU). POST /transcribe with raw
-audio bytes (any ffmpeg-decodable format, e.g. WhatsApp OPUS/OGG) -> {"text": ...}."""
+"""Local ASR service — parakeet-tdt-0.6b-v3 (NeMo, CPU). Two entry points:
+- POST /transcribe        raw audio bytes  -> {"text": ...}  (used by comms/WhatsApp)
+- POST /v1/transcribe     multipart 'file' -> {"text": ...}  (faster-whisper-compatible,
+                          used by ZeroClaw's local_whisper provider for Telegram voice)
+Both accept any ffmpeg-decodable format (OPUS/OGG/…)."""
 import os
 import subprocess
 import tempfile
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 
 MODEL = os.environ.get("MODEL", "nvidia/parakeet-tdt-0.6b-v3")
 _asr = None
@@ -44,19 +47,30 @@ def _decode_to_wav(raw: bytes) -> str:
     return wav
 
 
-@app.post("/transcribe")
-async def transcribe(request: Request):
+def _transcribe_bytes(raw: bytes) -> str:
     if _asr is None:
         raise HTTPException(status_code=503, detail="model not loaded yet")
-    raw = await request.body()
     if not raw:
-        raise HTTPException(status_code=400, detail="empty body")
+        raise HTTPException(status_code=400, detail="empty audio")
     wav = _decode_to_wav(raw)
     try:
         out = _asr.transcribe([wav])
         hyp = out[0]
         text = getattr(hyp, "text", hyp)  # NeMo returns Hypothesis (.text) or str
-        return {"text": (text or "").strip()}
+        return (text or "").strip()
     finally:
         if os.path.exists(wav):
             os.unlink(wav)
+
+
+@app.post("/transcribe")
+async def transcribe(request: Request):
+    """Raw audio bytes in the request body."""
+    return {"text": _transcribe_bytes(await request.body())}
+
+
+@app.post("/v1/transcribe")
+async def transcribe_whisper(file: UploadFile = File(...)):
+    """faster-whisper-compatible: multipart 'file'. Bearer auth (if any) is ignored —
+    the service is only reachable on the private compose network."""
+    return {"text": _transcribe_bytes(await file.read())}

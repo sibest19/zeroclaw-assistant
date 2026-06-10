@@ -18,10 +18,25 @@ model = "gpt-5.5"
 wire_api = "responses"
 requires_openai_auth = true
 
+# Trascrizione vocali in arrivo su Telegram → riusa il nostro transcriber parakeet
+# (locale) via il provider local_whisper, endpoint multipart compatibile Whisper.
+# IMPORTANTE: il runtime legge la tabella top-level [transcription] (NON
+# [providers.transcription.*]); il campo è `url` (non `uri`) e local_whisper NON
+# ha campo `language`. Senza `enabled = true` la trascrizione è disattivata e i
+# vocali vengono scartati in silenzio (nessuna chiamata al transcriber).
+[transcription]
+enabled = true
+max_duration_secs = 600   # vocali fino a 10 min (default 120s)
+
+[transcription.local_whisper]
+url = "http://transcriber:8770/v1/transcribe"
+bearer_token = "local"    # il nostro endpoint lo ignora (rete privata del compose)
+
 [agents.assistant]
 model_provider = "openai.codex"
 risk_profile   = "personal"
 runtime_profile = "personal"
+transcription_provider = "local_whisper"   # vocali Telegram → testo; chiave = TIPO provider (no alias)
 channels = ["telegram.default"]   # WhatsApp passa dal servizio comms via MCP
 
 [runtime_profiles.personal]
