@@ -16,6 +16,7 @@ import type Database from "better-sqlite3";
 import {
   insertMessage,
   setChatUnread,
+  setChatName,
   updateMessageBody,
   recordAssistantSend,
   type MessageRow,
@@ -159,6 +160,21 @@ export async function startWhatsApp(db: Database.Database): Promise<WASocket> {
     }
     if (connection === "open") {
       log.info("WhatsApp connected — ingesting");
+      // Baileys doesn't re-emit group metadata on reconnect → fetch subjects now.
+      sock
+        .groupFetchAllParticipating()
+        .then((groups) => {
+          let n = 0;
+          for (const [jid, meta] of Object.entries(groups)) {
+            const subject = (meta as any)?.subject;
+            if (subject) {
+              setChatName(db, jid, subject);
+              n++;
+            }
+          }
+          if (n) log.info(`resolved ${n} group name(s)`);
+        })
+        .catch((e) => log.warn({ err: String(e) }, "groupFetchAllParticipating failed"));
     }
     if (connection === "close") {
       const code = (lastDisconnect?.error as any)?.output?.statusCode;
@@ -186,27 +202,53 @@ export async function startWhatsApp(db: Database.Database): Promise<WASocket> {
     if (n) log.info(`ingested ${n} live message(s)`);
   });
 
-  // Initial / incremental history sync (old chats + their unread counts).
-  sock.ev.on("messaging-history.set", ({ messages, chats }) => {
+  // Resolve display names so search results / send-confirmations show contact and
+  // group NAMES instead of raw JIDs.
+  const applyContacts = (
+    contacts: Array<{
+      id?: string | null;
+      name?: string | null;
+      notify?: string | null;
+      verifiedName?: string | null;
+    }>,
+  ) => {
+    for (const c of contacts ?? []) {
+      if (c?.id) setChatName(db, c.id, c.name || c.verifiedName || c.notify || null);
+    }
+  };
+  const applyChats = (
+    chats: Array<{ id?: string | null; name?: string | null; unreadCount?: number | null }>,
+  ) => {
+    for (const c of chats ?? []) {
+      if (!c?.id) continue;
+      if (typeof c.unreadCount === "number") setChatUnread(db, c.id, c.unreadCount);
+      if (c.name) setChatName(db, c.id, c.name); // group subject / chat name
+    }
+  };
+  const applyGroups = (groups: Array<{ id?: string | null; subject?: string | null }>) => {
+    for (const g of groups ?? []) {
+      if (g?.id && g.subject) setChatName(db, g.id, g.subject);
+    }
+  };
+
+  sock.ev.on("contacts.upsert", (c) => applyContacts(c as any));
+  sock.ev.on("contacts.update", (c) => applyContacts(c as any));
+  sock.ev.on("chats.upsert", (c) => applyChats(c as any));
+  sock.ev.on("chats.update", (c) => applyChats(c as any));
+  sock.ev.on("groups.upsert", (g) => applyGroups(g as any));
+  sock.ev.on("groups.update", (g) => applyGroups(g as any));
+
+  // Initial / incremental history sync (old chats + names + their unread counts).
+  sock.ev.on("messaging-history.set", ({ messages, chats, contacts }) => {
     let n = 0;
     for (const msg of messages) {
       const row = toRow(msg);
       if (row && insertMessage(db, row)) n++;
     }
-    for (const c of chats ?? []) {
-      if (c.id && typeof c.unreadCount === "number") setChatUnread(db, c.id, c.unreadCount);
-    }
+    applyChats(chats as any);
+    applyContacts(contacts as any);
     if (n) log.info(`ingested ${n} message(s) from history sync`);
   });
-
-  // Live unread-count updates per chat.
-  const applyChatUnread = (chats: Array<{ id?: string | null; unreadCount?: number | null }>) => {
-    for (const c of chats) {
-      if (c.id && typeof c.unreadCount === "number") setChatUnread(db, c.id, c.unreadCount);
-    }
-  };
-  sock.ev.on("chats.upsert", (chats) => applyChatUnread(chats as any));
-  sock.ev.on("chats.update", (updates) => applyChatUnread(updates as any));
 
   return sock;
 }

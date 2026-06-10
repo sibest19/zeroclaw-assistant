@@ -7,7 +7,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type Database from "better-sqlite3";
-import { searchMessages, recentChats, recentMessages, getThread, type MessageRow } from "./db.js";
+import {
+  searchMessages,
+  recentChats,
+  recentMessages,
+  getThread,
+  chatName,
+  type MessageRow,
+} from "./db.js";
 import type { VectorIndex } from "./vector-index.js";
 
 const HOURS = 3_600_000;
@@ -23,9 +30,12 @@ function fmt(m: MessageRow): string {
   const when = new Date(m.ts).toISOString().slice(0, 16).replace("T", " ");
   const via = m.origin === "assistant" ? " (inviato via assistente)" : "";
   const who = m.direction === "out" ? `io${via}` : m.sender_name || m.sender || "?";
-  const chat = m.chat_name || m.chat_id;
+  // Chat label = resolved contact/group name (from setChatName); JID as honest fallback.
+  const name = m.chat_display || m.chat_id;
+  // Show the JID too when a human name is displayed (agent needs it to act).
+  const idref = m.chat_display ? `  ⟨${m.chat_id}⟩` : "";
   const body = (m.body ?? "").replace(/\s+/g, " ").slice(0, 500);
-  return `[${when}] (${chat}) ${who}: ${body}`;
+  return `[${when}] (${name}) ${who}: ${body}${idref}`;
 }
 
 function text(s: string) {
@@ -144,17 +154,23 @@ export function buildMcpServer(
       "invia_whatsapp",
       {
         description:
-          "INVIA un messaggio WhatsApp a un contatto per conto di Simone. Usala SOLO quando Simone lo chiede esplicitamente e dopo aver mostrato la bozza. (Richiede conferma.)",
+          "INVIA un messaggio WhatsApp per conto di Simone. Usala SOLO quando Simone lo chiede e dopo aver mostrato la bozza. (Richiede conferma.) Passa SEMPRE `nome` (nome leggibile del contatto/gruppo) così la conferma è chiara.",
         inputSchema: {
           destinatario: z
             .string()
             .describe("chat_id/JID (es. 39333...@s.whatsapp.net o ...@g.us) o numero con prefisso"),
+          nome: z
+            .string()
+            .describe(
+              "nome leggibile del destinatario (contatto o gruppo), mostrato nella conferma",
+            ),
           testo: z.string().describe("il testo del messaggio da inviare"),
         },
       },
-      async ({ destinatario, testo }) => {
+      async ({ destinatario, nome, testo }) => {
+        const display = (nome || "").trim() || chatName(db, destinatario) || destinatario;
         const r = await sendWa(destinatario, testo);
-        return text(`Inviato a ${r.jid}${r.id ? ` (id ${r.id})` : ""}.`);
+        return text(`Inviato a ${display}${r.id ? ` (id ${r.id})` : ""}.`);
       },
     );
   }

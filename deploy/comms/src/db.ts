@@ -26,6 +26,7 @@ export interface MessageRow {
   raw_json?: string | null;
   origin?: Origin; // default 'sync'
   is_read?: 0 | 1 | null; // for incoming: read by Simone? best-effort. null = unknown
+  chat_display?: string | null; // resolved chat name (contact/group), joined from chats
 }
 
 const SCHEMA_VERSION = 2;
@@ -174,13 +175,17 @@ export function insertMessage(db: Database.Database, m: MessageRow): boolean {
       INSERT INTO chats (chat_id, source, name, is_group, last_ts)
       VALUES (@chat_id, @source, @name, @is_group, @ts)
       ON CONFLICT(chat_id) DO UPDATE SET
-        name = COALESCE(excluded.name, chats.name),
+        -- keep an already-resolved name (contact/group via setChatName); only fill if empty.
+        name = COALESCE(chats.name, excluded.name),
         last_ts = MAX(COALESCE(chats.last_ts, 0), excluded.last_ts)
     `,
     ).run({
       chat_id: m.chat_id,
       source: m.source,
-      name: m.chat_name ?? null,
+      // For a 1:1 chat, an INCOMING message's sender name IS the contact's name →
+      // a good chat name. Never for groups (sender ≠ group) or outgoing (= Simone).
+      // setChatName (group subjects, saved contacts) still wins via COALESCE.
+      name: m.direction === "in" && !m.chat_id.includes("@g.us") ? (m.sender_name ?? null) : null,
       is_group: m.chat_id.includes("@g.us") ? 1 : 0,
       ts: m.ts,
     });
@@ -233,6 +238,50 @@ export function markRead(db: Database.Database, source: Source, extId: string, r
   );
 }
 
+// Resolve/refresh a chat's display name (contact name or group subject). No-op for
+// empty names; creates the chat row if needed.
+export function setChatName(
+  db: Database.Database,
+  chatId: string,
+  name: string | null | undefined,
+): void {
+  const n = (name ?? "").trim();
+  if (!n) return;
+  db.prepare(
+    `
+    INSERT INTO chats (chat_id, source, name, is_group)
+    VALUES (@chat_id, 'whatsapp', @name, @is_group)
+    ON CONFLICT(chat_id) DO UPDATE SET name = @name
+  `,
+  ).run({ chat_id: chatId, name: n, is_group: chatId.includes("@g.us") ? 1 : 0 });
+}
+
+// One-time backfill: name unnamed 1:1 chats from the latest INCOMING message's
+// sender name (the contact). Groups are named separately from their subject.
+export function backfillChatNames(db: Database.Database): number {
+  const r = db
+    .prepare(
+      `
+    UPDATE chats SET name = (
+      SELECT m.sender_name FROM messages m
+      WHERE m.chat_id = chats.chat_id AND m.direction = 'in' AND m.sender_name IS NOT NULL
+      ORDER BY m.ts DESC LIMIT 1
+    )
+    WHERE name IS NULL AND chat_id NOT LIKE '%@g.us'
+  `,
+    )
+    .run();
+  return r.changes;
+}
+
+// Resolved display name for a chat (or null).
+export function chatName(db: Database.Database, chatId: string): string | null {
+  const row = db.prepare("SELECT name FROM chats WHERE chat_id = ?").get(chatId) as
+    | { name: string | null }
+    | undefined;
+  return row?.name ?? null;
+}
+
 function ftsClause(): string {
   return "messages_fts MATCH @query AND m.ts >= @since";
 }
@@ -247,8 +296,9 @@ export function searchMessages(
   return db
     .prepare(
       `
-    SELECT m.* FROM messages_fts f
+    SELECT m.*, c.name AS chat_display FROM messages_fts f
     JOIN messages m ON m.rowid = f.rowid
+    LEFT JOIN chats c ON c.chat_id = m.chat_id
     WHERE ${ftsClause()}
     ORDER BY m.ts DESC LIMIT @limit
   `,
@@ -291,7 +341,9 @@ export function recentMessages(
   return db
     .prepare(
       `
-    SELECT * FROM messages WHERE ts >= @since ORDER BY ts DESC LIMIT @limit
+    SELECT m.*, c.name AS chat_display FROM messages m
+    LEFT JOIN chats c ON c.chat_id = m.chat_id
+    WHERE m.ts >= @since ORDER BY m.ts DESC LIMIT @limit
   `,
     )
     .all({ since, limit }) as unknown as MessageRow[];
@@ -306,7 +358,9 @@ export function getThread(
   return db
     .prepare(
       `
-    SELECT * FROM messages WHERE chat_id = @chatId ORDER BY ts DESC LIMIT @limit
+    SELECT m.*, c.name AS chat_display FROM messages m
+    LEFT JOIN chats c ON c.chat_id = m.chat_id
+    WHERE m.chat_id = @chatId ORDER BY m.ts DESC LIMIT @limit
   `,
     )
     .all({ chatId, limit }) as unknown as MessageRow[];

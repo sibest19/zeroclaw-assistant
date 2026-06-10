@@ -1,6 +1,6 @@
 // Ingester entrypoint (always-on service): WhatsApp ingestion + MCP server +
 // background embedding loop (keeps the semantic index up to date).
-import { openDb, getUnembedded, storeEmbeddings } from "./db.js";
+import { openDb, getUnembedded, storeEmbeddings, backfillChatNames } from "./db.js";
 import { startWhatsApp, sendWhatsApp } from "./whatsapp.js";
 import { startMcpHttp } from "./mcp-server.js";
 import { VectorIndex } from "./vector-index.js";
@@ -15,6 +15,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const db = openDb();
 console.log(`archive: ${ARCHIVE_DB}`);
+
+// Backfill 1:1 chat names from existing incoming messages (group names come from
+// groupFetchAllParticipating on WhatsApp connect).
+console.log(`backfilled ${backfillChatNames(db)} 1:1 chat name(s)`);
 
 const index = new VectorIndex(db);
 index.load();
