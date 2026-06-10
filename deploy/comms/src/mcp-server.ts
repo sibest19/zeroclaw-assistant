@@ -19,6 +19,21 @@ import type { VectorIndex } from "./vector-index.js";
 
 const HOURS = 3_600_000;
 
+// Display dates/times in Simone's timezone (configurable). Search/recent/thread
+// results are formatted in local time, not UTC.
+const DISPLAY_TZ = process.env.DISPLAY_TZ ?? "Europe/Rome";
+const timeFmt = new Intl.DateTimeFormat("it-IT", {
+  timeZone: DISPLAY_TZ,
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+function localTime(ts: number): string {
+  return timeFmt.format(new Date(ts));
+}
+
 // FTS5 MATCH-safe query: keep word chars, quote each token (implicit AND).
 function ftsQuery(raw: string): string {
   const toks = raw.match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -27,7 +42,7 @@ function ftsQuery(raw: string): string {
 }
 
 function fmt(m: MessageRow): string {
-  const when = new Date(m.ts).toISOString().slice(0, 16).replace("T", " ");
+  const when = localTime(m.ts);
   const via = m.origin === "assistant" ? " (inviato via assistente)" : "";
   const who = m.direction === "out" ? `io${via}` : m.sender_name || m.sender || "?";
   // Chat label = resolved contact/group name (from setChatName); JID as honest fallback.

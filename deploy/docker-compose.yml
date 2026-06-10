@@ -40,6 +40,9 @@ services:
     environment:
       # Trascrizione vocali via il servizio transcriber (rete compose).
       TRANSCRIBER_URL: "http://transcriber:8770/transcribe"
+      # Fuso orario di Simone: date/orari mostrati in ora locale (non UTC).
+      TZ: "Europe/Rome"
+      DISPLAY_TZ: "Europe/Rome"
     volumes:
       # Riusa archivio + sessione WhatsApp già esistenti (niente re-pairing/re-sync).
       # Contiene anche models/ (cache del modello di embedding).
@@ -69,6 +72,8 @@ services:
     depends_on:
       comms:
         condition: service_healthy # attende che l'MCP sia su prima di connettersi
+    environment:
+      TZ: "Europe/Rome" # l'agente ragiona su "oggi/ora" in fuso locale
     env_file:
       - .env # secret (bot token, ecc.) come env-override
     volumes:
