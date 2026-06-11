@@ -14,6 +14,7 @@ import {
   getThread,
   chatName,
   recentRevisions,
+  revisionsForMessage,
   type MessageRow,
   type RevisionRow,
 } from "./db.js";
@@ -81,6 +82,33 @@ function fmtRevision(r: RevisionRow): string {
   return `[${when}] ✏️ MODIFICATO in (${chat}) da ${who}: "${clip(r.prev_body)}" → "${clip(r.new_body)}"`;
 }
 
+// Render rows for the agent. For messages flagged edited/deleted, append the
+// history INLINE (deleted text; original version before edits) so the agent sees
+// it without a second tool call and can surface it proactively in a recap.
+function renderRows(db: Database.Database, rows: MessageRow[]): string {
+  const clip = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").slice(0, 400);
+  return rows
+    .map((m) => {
+      let line = fmt(m);
+      if (m.source !== "email" && (m.edited_at || m.deleted_at) && m.rowid != null) {
+        const revs = revisionsForMessage(db, m.rowid);
+        const del = revs.find((r) => r.kind === "delete");
+        const edits = revs.filter((r) => r.kind === "edit");
+        if (edits.length) {
+          // edits[0].prev_body = the original text before any edit; the line above
+          // already shows the latest version. Agent compares to judge significance.
+          const extra = edits.length > 1 ? ` (+${edits.length - 1} modifiche intermedie)` : "";
+          line += `\n    ↳ ✏️ versione precedente: "${clip(edits[0].prev_body)}"${extra}`;
+        }
+        if (del) {
+          line += `\n    ↳ 🗑️ testo eliminato (mai più visibile in chat): "${clip(del.prev_body)}"`;
+        }
+      }
+      return line;
+    })
+    .join("\n");
+}
+
 function text(s: string) {
   return { content: [{ type: "text" as const, text: s }] };
 }
@@ -124,7 +152,7 @@ export function buildMcpServer(
     async ({ query, giorni, limit }) => {
       const since = giorni ? Date.now() - giorni * 24 * HOURS : 0;
       const rows = searchMessages(db, ftsQuery(query), { since, limit: limit ?? 50 });
-      return text(rows.length ? rows.map(fmt).join("\n") : "nessun risultato");
+      return text(rows.length ? renderRows(db, rows) : "nessun risultato");
     },
   );
 
@@ -143,7 +171,7 @@ export function buildMcpServer(
       async ({ query, giorni, limit }) => {
         const since = giorni ? Date.now() - giorni * 24 * HOURS : undefined;
         const rows = await index.search(query, limit ?? 30, { since });
-        return text(rows.length ? rows.map(fmt).join("\n") : "nessun risultato");
+        return text(rows.length ? renderRows(db, rows) : "nessun risultato");
       },
     );
   }
@@ -161,7 +189,7 @@ export function buildMcpServer(
     async ({ ore, limit }) => {
       const since = Date.now() - (ore ?? 1) * HOURS;
       const rows = recentMessages(db, { since, limit: limit ?? 200 });
-      return text(rows.length ? rows.map(fmt).join("\n") : "nessun messaggio nel periodo");
+      return text(rows.length ? renderRows(db, rows) : "nessun messaggio nel periodo");
     },
   );
 
@@ -202,7 +230,7 @@ export function buildMcpServer(
     },
     async ({ chat_id, limit }) => {
       const rows = getThread(db, chat_id, { limit: limit ?? 100 }).reverse(); // chronological
-      return text(rows.length ? rows.map(fmt).join("\n") : "thread vuoto o chat_id sconosciuto");
+      return text(rows.length ? renderRows(db, rows) : "thread vuoto o chat_id sconosciuto");
     },
   );
 

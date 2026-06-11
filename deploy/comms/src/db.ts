@@ -13,6 +13,7 @@ export type Direction = "in" | "out";
 export type Origin = "sync" | "assistant";
 
 export interface MessageRow {
+  rowid?: number; // present on rows read back from the DB (SELECT m.*)
   ext_id: string;
   source: Source;
   chat_id: string;
@@ -334,6 +335,21 @@ export interface RevisionRow {
   sender_name: string | null;
   sender: string | null;
   direction: Direction;
+}
+
+// All revisions for a single message, oldest first (so prev_body of the first
+// edit is the original text). Used to enrich search/thread results inline.
+export function revisionsForMessage(
+  db: Database.Database,
+  messageRowid: number,
+): Array<Pick<RevisionRow, "kind" | "prev_body" | "new_body" | "changed_at">> {
+  return db
+    .prepare(
+      `SELECT kind, prev_body, new_body, changed_at
+       FROM message_revisions WHERE message_rowid = ?
+       ORDER BY changed_at ASC, id ASC`,
+    )
+    .all(messageRowid) as Array<Pick<RevisionRow, "kind" | "prev_body" | "new_body" | "changed_at">>;
 }
 
 // Recent edits & deletions across all chats (audit feed), most recent first.
