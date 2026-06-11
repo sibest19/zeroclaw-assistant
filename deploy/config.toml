@@ -55,6 +55,7 @@ auto_approve = [
   "archivio__messaggi_recenti",
   "archivio__chat_recenti",
   "archivio__leggi_thread",
+  "archivio__modifiche_recenti",
   "archivio__email_leggi",
   "memory_recall",
   "content_search",

@@ -27,9 +27,12 @@ export interface MessageRow {
   origin?: Origin; // default 'sync'
   is_read?: 0 | 1 | null; // for incoming: read by Simone? best-effort. null = unknown
   chat_display?: string | null; // resolved chat name (contact/group), joined from chats
+  edited_at?: number | null; // last edit time (ms), null = never edited
+  deleted_at?: number | null; // revoke/delete time (ms), null = not deleted; body kept
+  revision?: number | null; // number of edits applied (0 = original)
 }
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 // FTS5 tokenizer: fold diacritics so "perche" matches "perché", etc. (Italian).
 const FTS_TOKENIZER = "unicode61 remove_diacritics 2";
 
@@ -71,11 +74,29 @@ function initSchema(db: Database.Database): void {
       raw_json         TEXT,
       origin           TEXT NOT NULL DEFAULT 'sync',
       is_read          INTEGER,
+      edited_at        INTEGER,
+      deleted_at       INTEGER,
+      revision         INTEGER NOT NULL DEFAULT 0,
       ingested_at      INTEGER NOT NULL,
       UNIQUE(source, ext_id)
     );
     CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages(chat_id, ts);
     CREATE INDEX IF NOT EXISTS idx_messages_ts      ON messages(ts);
+
+    -- Audit trail of message edits and deletions (one row per change). The
+    -- messages row holds the CURRENT state (edited body / deleted flag); these
+    -- rows preserve what was there before, so history is recoverable.
+    CREATE TABLE IF NOT EXISTS message_revisions (
+      id            INTEGER PRIMARY KEY,
+      message_rowid INTEGER NOT NULL REFERENCES messages(rowid) ON DELETE CASCADE,
+      kind          TEXT NOT NULL,          -- 'edit' | 'delete'
+      prev_body     TEXT,                   -- body before the change
+      new_body      TEXT,                   -- body after the change (NULL for delete)
+      changed_at    INTEGER NOT NULL,       -- when WhatsApp reported the change (ms)
+      recorded_at   INTEGER NOT NULL        -- when we wrote this row (ms)
+    );
+    CREATE INDEX IF NOT EXISTS idx_revisions_msg     ON message_revisions(message_rowid, changed_at);
+    CREATE INDEX IF NOT EXISTS idx_revisions_changed ON message_revisions(changed_at);
 
     CREATE TABLE IF NOT EXISTS chats (
       chat_id      TEXT PRIMARY KEY,
@@ -134,6 +155,17 @@ function migrate(db: Database.Database, from: number): void {
         );
         INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
       `);
+    }
+    // v2 → v3: edit/deletion tracking columns (message_revisions table is created
+    // unconditionally in initSchema via CREATE IF NOT EXISTS).
+    if (!columnExists(db, "messages", "edited_at")) {
+      db.exec("ALTER TABLE messages ADD COLUMN edited_at INTEGER");
+    }
+    if (!columnExists(db, "messages", "deleted_at")) {
+      db.exec("ALTER TABLE messages ADD COLUMN deleted_at INTEGER");
+    }
+    if (!columnExists(db, "messages", "revision")) {
+      db.exec("ALTER TABLE messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 0");
     }
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
   })();
@@ -236,6 +268,95 @@ export function markRead(db: Database.Database, source: Source, extId: string, r
   db.prepare("UPDATE messages SET is_read = @read WHERE source = @source AND ext_id = @ext_id").run(
     { read, source, ext_id: extId },
   );
+}
+
+// Record an edit: append a revision (prev → new) and update the live body to the
+// latest text. The UPDATE trigger refreshes FTS; we drop the embedding so the new
+// text is re-indexed. No-op if the message is unknown or the body is unchanged.
+export function recordEdit(
+  db: Database.Database,
+  source: Source,
+  extId: string,
+  newBody: string,
+  changedAt: number,
+): boolean {
+  const row = db
+    .prepare("SELECT rowid, body FROM messages WHERE source = ? AND ext_id = ?")
+    .get(source, extId) as { rowid: number; body: string | null } | undefined;
+  if (!row) return false;
+  if ((row.body ?? "") === newBody) return false; // identical → ignore (echo)
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO message_revisions (message_rowid, kind, prev_body, new_body, changed_at, recorded_at)
+       VALUES (?, 'edit', ?, ?, ?, ?)`,
+    ).run(row.rowid, row.body ?? null, newBody, changedAt, Date.now());
+    db.prepare(
+      "UPDATE messages SET body = ?, edited_at = ?, revision = revision + 1 WHERE rowid = ?",
+    ).run(newBody, changedAt, row.rowid);
+    db.prepare("DELETE FROM embeddings WHERE rowid = ?").run(row.rowid);
+  })();
+  return true;
+}
+
+// Mark a message deleted (revoked). Keeps the body so Simone can still read what
+// was removed; records a 'delete' revision. Idempotent (no-op if already deleted
+// or unknown).
+export function markDeleted(
+  db: Database.Database,
+  source: Source,
+  extId: string,
+  deletedAt: number,
+): boolean {
+  const row = db
+    .prepare("SELECT rowid, body, deleted_at FROM messages WHERE source = ? AND ext_id = ?")
+    .get(source, extId) as
+    | { rowid: number; body: string | null; deleted_at: number | null }
+    | undefined;
+  if (!row || row.deleted_at != null) return false;
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO message_revisions (message_rowid, kind, prev_body, new_body, changed_at, recorded_at)
+       VALUES (?, 'delete', ?, NULL, ?, ?)`,
+    ).run(row.rowid, row.body ?? null, deletedAt, Date.now());
+    db.prepare("UPDATE messages SET deleted_at = ? WHERE rowid = ?").run(deletedAt, row.rowid);
+  })();
+  return true;
+}
+
+// A single edit/deletion event, joined with its chat + sender for display.
+export interface RevisionRow {
+  kind: "edit" | "delete";
+  prev_body: string | null;
+  new_body: string | null;
+  changed_at: number;
+  chat_id: string;
+  chat_display: string | null;
+  sender_name: string | null;
+  sender: string | null;
+  direction: Direction;
+}
+
+// Recent edits & deletions across all chats (audit feed), most recent first.
+export function recentRevisions(
+  db: Database.Database,
+  opts: { since?: number; limit?: number } = {},
+): RevisionRow[] {
+  const since = opts.since ?? 0;
+  const limit = opts.limit ?? 100;
+  return db
+    .prepare(
+      `
+    SELECT r.kind, r.prev_body, r.new_body, r.changed_at,
+           m.chat_id, m.sender_name, m.sender, m.direction,
+           c.name AS chat_display
+    FROM message_revisions r
+    JOIN messages m ON m.rowid = r.message_rowid
+    LEFT JOIN chats c ON c.chat_id = m.chat_id
+    WHERE r.changed_at >= @since
+    ORDER BY r.changed_at DESC LIMIT @limit
+  `,
+    )
+    .all({ since, limit }) as RevisionRow[];
 }
 
 // Resolve/refresh a chat's display name (contact name or group subject). No-op for

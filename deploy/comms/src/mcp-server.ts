@@ -13,7 +13,9 @@ import {
   recentMessages,
   getThread,
   chatName,
+  recentRevisions,
   type MessageRow,
+  type RevisionRow,
 } from "./db.js";
 import type { VectorIndex } from "./vector-index.js";
 
@@ -59,7 +61,24 @@ function fmt(m: MessageRow): string {
   const name = m.chat_display || m.chat_id;
   // Show the JID too when a human name is displayed (agent needs it to act).
   const idref = m.chat_display ? `  ⟨${m.chat_id}⟩` : "";
-  return `[${when}] (${name}) ${who}: ${body}${idref}`;
+  // Flag edited/deleted messages so they stand out (body shown is the latest text;
+  // deleted messages keep their body). Use modifiche_recenti for the before/after.
+  const flags =
+    (m.deleted_at ? ` 🗑️[eliminato ${localTime(m.deleted_at)}]` : "") +
+    (m.edited_at ? ` ✏️[modificato${m.revision && m.revision > 1 ? ` ×${m.revision}` : ""}]` : "");
+  return `[${when}] (${name}) ${who}: ${body}${flags}${idref}`;
+}
+
+// Render one edit/deletion event with its before→after text.
+function fmtRevision(r: RevisionRow): string {
+  const when = localTime(r.changed_at);
+  const who = r.direction === "out" ? "io" : r.sender_name || r.sender || "?";
+  const chat = r.chat_display || r.chat_id;
+  const clip = (s: string | null) => (s ?? "").replace(/\s+/g, " ").slice(0, 300);
+  if (r.kind === "delete") {
+    return `[${when}] 🗑️ ELIMINATO in (${chat}) da ${who}: "${clip(r.prev_body)}"`;
+  }
+  return `[${when}] ✏️ MODIFICATO in (${chat}) da ${who}: "${clip(r.prev_body)}" → "${clip(r.new_body)}"`;
 }
 
 function text(s: string) {
@@ -184,6 +203,27 @@ export function buildMcpServer(
     async ({ chat_id, limit }) => {
       const rows = getThread(db, chat_id, { limit: limit ?? 100 }).reverse(); // chronological
       return text(rows.length ? rows.map(fmt).join("\n") : "thread vuoto o chat_id sconosciuto");
+    },
+  );
+
+  server.registerTool(
+    "modifiche_recenti",
+    {
+      description:
+        "Messaggi WhatsApp MODIFICATI o ELIMINATI di recente (da quando il tracking è attivo). Per ogni voce: chi, quando, e il testo PRIMA→DOPO per le modifiche, o il testo eliminato. Usa per 'cosa hanno corretto/cancellato', 'cosa ho cancellato io'.",
+      inputSchema: {
+        ore: z.number().optional().describe("finestra in ore (default 168 = 7 giorni)"),
+        limit: z.number().optional().describe("max voci (default 100)"),
+      },
+    },
+    async ({ ore, limit }) => {
+      const since = Date.now() - (ore ?? 168) * HOURS;
+      const rows = recentRevisions(db, { since, limit: limit ?? 100 });
+      return text(
+        rows.length
+          ? rows.map(fmtRevision).join("\n")
+          : "nessuna modifica o eliminazione nel periodo",
+      );
     },
   );
 

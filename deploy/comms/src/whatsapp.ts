@@ -7,6 +7,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   downloadMediaMessage,
+  WAMessageStubType,
   type WAMessage,
   type WASocket,
 } from "@whiskeysockets/baileys";
@@ -18,6 +19,8 @@ import {
   setChatUnread,
   setChatName,
   updateMessageBody,
+  recordEdit,
+  markDeleted,
   recordAssistantSend,
   type MessageRow,
 } from "./db.js";
@@ -58,9 +61,9 @@ export async function sendWhatsApp(
   return { jid, id };
 }
 
-// Extract human-readable text from the many WhatsApp message shapes.
-function extractBody(msg: WAMessage): string | null {
-  const m = msg.message;
+// Extract human-readable text from the many WhatsApp message-content shapes.
+// Works on a raw message content object (also reused for edited content).
+function extractContent(m: WAMessage["message"]): string | null {
   if (!m) return null;
   return (
     m.conversation ??
@@ -75,6 +78,10 @@ function extractBody(msg: WAMessage): string | null {
     (m.stickerMessage ? "[sticker]" : null) ??
     null
   );
+}
+
+function extractBody(msg: WAMessage): string | null {
+  return extractContent(msg.message);
 }
 
 function toRow(msg: WAMessage): MessageRow | null {
@@ -200,6 +207,32 @@ export async function startWhatsApp(db: Database.Database): Promise<WASocket> {
       if (msg.message?.audioMessage && TRANSCRIBER_URL) void transcribeAudio(msg);
     }
     if (n) log.info(`ingested ${n} live message(s)`);
+  });
+
+  // Edits and deletions (revokes) both surface via messages.update, keyed by the
+  // ORIGINAL message id. We keep the history: an edit appends a revision and bumps
+  // the live body to the latest text; a deletion flags the message (body kept) so
+  // Simone can still read what was removed. Only acts on messages we already have.
+  sock.ev.on("messages.update", (updates) => {
+    for (const { key, update } of updates) {
+      const chatId = key.remoteJid;
+      const extId = key.id;
+      if (!chatId || !extId || chatId === "status@broadcast") continue;
+      const u = update as {
+        messageStubType?: number;
+        message?: WAMessage["message"] | null;
+        messageTimestamp?: number | null;
+      };
+      if (u.messageStubType === WAMessageStubType.REVOKE) {
+        if (markDeleted(db, "whatsapp", extId, Date.now()))
+          log.info(`message deleted ${extId} in ${chatId}`);
+      } else if (u.message?.editedMessage?.message) {
+        const newBody = extractContent(u.message.editedMessage.message);
+        const at = u.messageTimestamp ? Number(u.messageTimestamp) * 1000 : Date.now();
+        if (newBody != null && recordEdit(db, "whatsapp", extId, newBody, at))
+          log.info(`message edited ${extId} in ${chatId}`);
+      }
+    }
   });
 
   // Resolve display names so search results / send-confirmations show contact and

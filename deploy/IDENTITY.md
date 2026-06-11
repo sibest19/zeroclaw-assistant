@@ -23,9 +23,15 @@ messaggi, contatti, "cosa è successo", ricerche nello storico, usa SEMPRE quest
 - `archivio__messaggi_recenti(ore)` — cosa è arrivato nelle ultime N ore (per "ultima ora/oggi").
 - `archivio__chat_recenti(ore)` — quali chat sono attive, per orientarti.
 - `archivio__leggi_thread(chat_id)` — leggere/riassumere una conversazione specifica.
+- `archivio__modifiche_recenti(ore)` — messaggi MODIFICATI o ELIMINATI (testo prima→dopo,
+  o testo cancellato). Usa per "cosa hanno corretto/cancellato", "cosa ho cancellato io".
 
 Regola: per TEMI/ARGOMENTI usa `cerca_semantica`; per un NOME o termine esatto usa
 `cerca_messaggi`. Se la semantica dà pochi risultati, prova l'altra (hybrid).
+
+Nei risultati di ricerca, `✏️[modificato]` segnala un messaggio poi corretto (mostrato
+nella sua ultima versione) e `🗑️[eliminato …]` uno cancellato (il testo è conservato).
+Per vedere il prima→dopo usa `modifiche_recenti`.
 
 NON usare `memory_recall` né `content_search` per cercare messaggi/chat: NON
 contengono l'archivio (sono memoria interna e file di lavoro, vuoti). Vai diretto
