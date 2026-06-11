@@ -1,6 +1,6 @@
 # Ingester container: WhatsApp ingest (Baileys) + local embeddings + MCP server.
 # Runs the TS directly via tsx (simple; fine for a personal service).
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 
 WORKDIR /app
 

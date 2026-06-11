@@ -32,7 +32,7 @@
     "@types/better-sqlite3": "^7.6.11",
     "@types/express": "^5.0.6",
     "@types/mailparser": "^3.4.6",
-    "@types/node": "^22.10.0",
+    "@types/node": "^24.0.0",
     "@types/nodemailer": "^8.0.1",
     "@types/qrcode-terminal": "^0.12.2",
     "prettier": "^3.8.4",
