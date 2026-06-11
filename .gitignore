@@ -1,2 +1,19 @@
 .DS_Store
 *.log
+
+# ── Secrets / private state — repo-wide backstop (deploy/.gitignore has more) ──
+# Never commit any of these. The docker-publish CI also runs gitleaks as a gate.
+.env
+.env.*
+!.env.example
+**/auth-profiles.json
+**/.secret_key
+**/*.secret_key
+*.pem
+*.key
+**/wa-auth/
+**/whatsapp-web/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+zeroclaw.luks

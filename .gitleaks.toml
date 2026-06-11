@@ -1,0 +1,12 @@
+# gitleaks config — used by the docker-publish `secret-scan` gate (and locally:
+#   docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:latest git -v
+# Keeps the full default ruleset; only whitelists files that intentionally hold
+# placeholder/example-shaped values.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentional template/placeholder files"
+paths = [
+  '''(^|/)\.env\.example$''',
+]

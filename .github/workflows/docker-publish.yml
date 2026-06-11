@@ -1,0 +1,130 @@
+# Build the assistant's three service images and publish them to the GitHub
+# Container Registry (GHCR, ghcr.io), multi-architecture (amd64 + arm64).
+#
+# Secret safety (the whole point of this repo staying clean):
+#   1. A gitleaks gate (`secret-scan`) scans the full git history on every run.
+#      If ANY secret is detected the build/publish jobs never run.
+#   2. Publishing uses the ephemeral GITHUB_TOKEN — no personal token or
+#      long-lived credential is stored in the repo or in secrets.
+#   3. Each image is built from a clean checkout with a selective COPY +
+#      .dockerignore, so .env / auth-profiles.json / *.db / wa-auth / zc-data
+#      (all git-ignored) are never in the build context, never baked in.
+name: docker-publish
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+    paths:
+      - "deploy/comms/**"
+      - "deploy/transcriber/**"
+      - "Dockerfile.zeroclaw"
+      - "vendor/zeroclaw" # submodule pointer bump
+      - ".github/workflows/docker-publish.yml"
+  pull_request:
+    paths:
+      - "deploy/comms/**"
+      - "deploy/transcriber/**"
+      - "Dockerfile.zeroclaw"
+      - ".github/workflows/docker-publish.yml"
+  workflow_dispatch:
+
+# One in-flight run per ref; cancel superseded pushes.
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read # checkout only; no write access to the repo
+  packages: write # push to GHCR under the owner's namespace
+
+jobs:
+  # ── Gate: no secret may ever reach the repo. Fails the whole pipeline. ──
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so gitleaks scans every commit
+          submodules: false # scan our repo only, not upstream zeroclaw
+      - name: gitleaks (scan git history; --redact keeps values out of logs)
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            zricethezav/gitleaks:latest git --redact -v --exit-code 1
+
+  build:
+    needs: secret-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 180 # arm64 under QEMU (esp. the Rust agent) is slow on a cold cache
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Node service: cross-builds cleanly (better-sqlite3 from source,
+          # onnxruntime-node has linux/arm64 prebuilts).
+          - image: zeroclaw-comms
+            context: deploy/comms
+            dockerfile: deploy/comms/Dockerfile
+            platforms: linux/amd64,linux/arm64
+            submodules: "false"
+          # ASR service: amd64 only. PyTorch's CPU wheel index has no aarch64
+          # wheels and NeMo pulls heavy C-extensions, so an arm64 build is not
+          # viable here. The deploy target is x86 anyway. To try arm64 later,
+          # rework the torch install and set platforms to include linux/arm64.
+          - image: zeroclaw-transcriber
+            context: deploy/transcriber
+            dockerfile: deploy/transcriber/Dockerfile
+            platforms: linux/amd64
+            submodules: "false"
+          # Rust agent built from the pinned vendor/zeroclaw submodule with our
+          # own Dockerfile (upstream stays untouched).
+          - image: zeroclaw-agent
+            context: vendor/zeroclaw
+            dockerfile: Dockerfile.zeroclaw
+            platforms: linux/amd64,linux/arm64
+            submodules: "recursive"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: ${{ matrix.submodules }}
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Log in only when we intend to push (skip for pull_request validation).
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false # clean multi-arch manifest (no unknown/unknown entries)
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
