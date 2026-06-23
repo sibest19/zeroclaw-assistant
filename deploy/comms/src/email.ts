@@ -92,8 +92,8 @@ export async function startEmail(db: Database.Database): Promise<void> {
           await syncAccount(db, acc, first ? EMAIL_BACKFILL_DAYS : 2);
           if (first) log.info(`[email:${acc.name}] backfill done`);
           first = false;
-        } catch (e) {
-          log.warn({ err: String(e) }, `[email:${acc.name}] sync failed`);
+        } catch (e: any) {
+          log.warn({ err: e?.message ?? String(e), code: e?.code, response: e?.response }, `[email:${acc.name}] sync failed`);
         }
         await sleep(EMAIL_POLL_SECS * 1000);
       }
