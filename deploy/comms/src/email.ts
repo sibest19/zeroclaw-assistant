@@ -102,11 +102,77 @@ export async function startEmail(db: Database.Database): Promise<void> {
   log.info(`email enabled: ${EMAIL_ACCOUNTS.map((a) => a.name).join(", ")}`);
 }
 
-// On-demand: fetch + parse the full body of one message (NOT stored).
-export async function fetchEmailBody(accountName: string, uid: number | string): Promise<string> {
+// Gmail "All Mail" mailbox path (localized, e.g. "[Gmail]/Tutti i messaggi"),
+// resolved via the \All special-use flag. Falls back to the English default.
+async function allMailPath(client: ImapFlow): Promise<string> {
+  const boxes = await client.list();
+  const all = boxes.find((b) => b.specialUse === "\\All");
+  return all?.path ?? "[Gmail]/All Mail";
+}
+
+export interface EmailHit {
+  account: string;
+  uid: number;
+  mailbox: string;
+  from: string | null;
+  fromName: string | null;
+  subject: string;
+  date: number;
+}
+
+// Live search across the WHOLE mailbox (no archive, no age limit, searches the
+// body too). `query` is Gmail search syntax (from:, subject:, before:/after:,
+// has:attachment, free text…). UIDs are scoped to the All-Mail mailbox, so
+// fetchEmailBody must be called with the returned `mailbox`.
+export async function searchEmail(
+  accountName: string,
+  query: string,
+  limit = 30,
+): Promise<EmailHit[]> {
   const acc = account(accountName);
   return withImap(acc, async (client) => {
-    const lock = await client.getMailboxLock("INBOX");
+    if (!client.capabilities.has("X-GM-EXT-1")) {
+      throw new Error("il server non supporta la ricerca Gmail (X-GM-EXT-1)");
+    }
+    const box = await allMailPath(client);
+    const lock = await client.getMailboxLock(box);
+    try {
+      const uids = (await client.search({ gmraw: query }, { uid: true })) || [];
+      if (!uids.length) return [];
+      const pick = uids.slice(-limit).reverse(); // newest first, capped
+      const hits: EmailHit[] = [];
+      for await (const msg of client.fetch(pick, { envelope: true }, { uid: true })) {
+        const env = msg.envelope;
+        if (!env) continue;
+        const from = env.from?.[0];
+        hits.push({
+          account: acc.name,
+          uid: msg.uid,
+          mailbox: box,
+          from: from?.address ?? null,
+          fromName: from?.name ?? null,
+          subject: env.subject || "(senza oggetto)",
+          date: env.date ? new Date(env.date).getTime() : Date.now(),
+        });
+      }
+      return hits;
+    } finally {
+      lock.release();
+    }
+  });
+}
+
+// On-demand: fetch + parse the full body of one message (NOT stored). `mailbox`
+// defaults to INBOX (archive results) but accepts the All-Mail path for hits
+// coming from searchEmail.
+export async function fetchEmailBody(
+  accountName: string,
+  uid: number | string,
+  mailbox = "INBOX",
+): Promise<string> {
+  const acc = account(accountName);
+  return withImap(acc, async (client) => {
+    const lock = await client.getMailboxLock(mailbox);
     try {
       const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
       if (!msg || !msg.source) return "(messaggio non trovato)";

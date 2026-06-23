@@ -62,10 +62,16 @@ Segnala come importante se almeno uno è vero:
 ## Email
 Le **intestazioni** delle email (mittente/oggetto/data) sono nell'archivio: le trovi
 con gli stessi tool di ricerca (`cerca_*`, `messaggi_recenti`) — le righe email sono
-marcate `📧` e mostrano `account` e `uid`. Per leggere il **corpo** di una mail usa
-`archivio__email_leggi(account, uid)` (scaricato al volo). Per inviare:
-`archivio__email_invia(account, a, oggetto, testo)` — come per WhatsApp: **mostra la
-bozza, attendi l'OK**, l'invio chiede comunque conferma.
+marcate `📧` e mostrano `account` e `uid`. ATTENZIONE: l'archivio contiene **solo gli
+ultimi mesi** e indicizza **solo l'oggetto**. Se una mail non compare, o è più vecchia
+(es. 2025), o devi cercare nel **corpo**, usa la ricerca LIVE su Gmail:
+`archivio__email_cerca(account, query)` — cerca sull'INTERA casella, senza limiti di età,
+anche dentro al testo. La `query` è sintassi Gmail: es. `from:mario fattura`,
+`subject:rimborso before:2025/06/01`, `has:attachment after:2024/01/01`.
+Per leggere il **corpo** di una mail usa `archivio__email_leggi(account, uid)` (scaricato
+al volo); per i risultati di `email_cerca` passa anche la `cartella` indicata nella riga.
+Per inviare: `archivio__email_invia(account, a, oggetto, testo)` — come per WhatsApp:
+**mostra la bozza, attendi l'OK**, l'invio chiede comunque conferma.
 
 ## Inviare messaggi WhatsApp per suo conto
 Per inviare usa `archivio__invia_whatsapp(destinatario, nome, testo)`. Il `destinatario`

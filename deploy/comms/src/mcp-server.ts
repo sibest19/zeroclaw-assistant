@@ -116,18 +116,37 @@ function text(s: string) {
 // Injected senders/readers (present only in the live comms, not the read-only
 // MCP standalone).
 export type SendWa = (to: string, text: string) => Promise<{ jid: string; id: string | null }>;
-export type ReadEmail = (account: string, uid: number | string) => Promise<string>;
+export type ReadEmail = (
+  account: string,
+  uid: number | string,
+  mailbox?: string,
+) => Promise<string>;
 export type SendEmail = (
   account: string,
   to: string,
   subject: string,
   text: string,
 ) => Promise<{ messageId: string; accepted: string[] }>;
+export type EmailSearchHit = {
+  account: string;
+  uid: number;
+  mailbox: string;
+  from: string | null;
+  fromName: string | null;
+  subject: string;
+  date: number;
+};
+export type SearchEmail = (
+  account: string,
+  query: string,
+  limit?: number,
+) => Promise<EmailSearchHit[]>;
 
 export interface CommsActions {
   sendWa?: SendWa;
   readEmail?: ReadEmail;
   sendEmail?: SendEmail;
+  searchEmail?: SearchEmail;
 }
 
 export function buildMcpServer(
@@ -135,7 +154,7 @@ export function buildMcpServer(
   index?: VectorIndex,
   actions: CommsActions = {},
 ): McpServer {
-  const { sendWa, readEmail, sendEmail } = actions;
+  const { sendWa, readEmail, sendEmail, searchEmail } = actions;
   const server = new McpServer({ name: "archivio-messaggi", version: "0.1.0" });
 
   server.registerTool(
@@ -286,15 +305,47 @@ export function buildMcpServer(
       "email_leggi",
       {
         description:
-          "Scarica al volo il CORPO completo di una email (non è memorizzato). account+uid li trovi nei risultati di ricerca (righe 📧 email).",
+          "Scarica al volo il CORPO completo di una email (non è memorizzato). account+uid (e, se presente, cartella) li trovi nelle righe 📧 dei risultati di ricerca/email_cerca.",
         inputSchema: {
           account: z.string().describe("nome account (es. personal/work/cloud)"),
           uid: z.union([z.number(), z.string()]).describe("uid IMAP della mail"),
+          cartella: z
+            .string()
+            .optional()
+            .describe(
+              "cartella IMAP dell'uid; ometti per le mail d'archivio (INBOX). Per i risultati di email_cerca passa il valore indicato nella riga.",
+            ),
         },
       },
-      async ({ account, uid }) => {
-        const body = await readEmail(account, uid);
+      async ({ account, uid, cartella }) => {
+        const body = await readEmail(account, uid, cartella);
         return text(body || "(corpo vuoto)");
+      },
+    );
+  }
+
+  if (searchEmail) {
+    server.registerTool(
+      "email_cerca",
+      {
+        description:
+          "Ricerca LIVE su Gmail sull'INTERA casella (anche email vecchie di anni, NON solo quelle in archivio), cercando anche dentro al CORPO. Usala quando una mail non compare in archivio o è più vecchia del backfill. La query usa la sintassi di ricerca Gmail: es. `from:mario fattura`, `subject:rimborso before:2025/06/01`, `has:attachment after:2024/01/01`. Restituisce gli header; per il corpo poi usa email_leggi con account+uid+cartella indicati.",
+        inputSchema: {
+          account: z.string().describe("nome account (es. personal/work/cloud)"),
+          query: z.string().describe("query in sintassi di ricerca Gmail"),
+          limit: z.number().optional().describe("max risultati (default 30)"),
+        },
+      },
+      async ({ account, query, limit }) => {
+        const hits = await searchEmail(account, query, limit ?? 30);
+        if (!hits.length) return text(`Nessuna email trovata per: ${query}`);
+        const lines = hits.map((h) => {
+          const when = localTime(h.date);
+          const subj = (h.subject ?? "").replace(/\s+/g, " ").slice(0, 200);
+          const ref = `  «leggi: account=${h.account} uid=${h.uid} cartella="${h.mailbox}"»`;
+          return `[${when}] 📧 email da ${h.fromName || h.from || "?"} — oggetto: ${subj}${ref}`;
+        });
+        return text(lines.join("\n"));
       },
     );
   }

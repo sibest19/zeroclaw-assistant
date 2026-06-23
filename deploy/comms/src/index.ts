@@ -2,7 +2,7 @@
 // background embedding loop (keeps the semantic index up to date).
 import { openDb, getUnembedded, storeEmbeddings, backfillChatNames } from "./db.js";
 import { startWhatsApp, sendWhatsApp } from "./whatsapp.js";
-import { startEmail, fetchEmailBody, sendEmail } from "./email.js";
+import { startEmail, fetchEmailBody, sendEmail, searchEmail } from "./email.js";
 import { startMcpHttp } from "./mcp-server.js";
 import { VectorIndex } from "./vector-index.js";
 import { initEmbedder, embedPassages, vecToBlob } from "./embeddings.js";
@@ -35,8 +35,9 @@ await startEmail(db); // background IMAP header poll per account (no-op if uncon
 // email_leggi (on-demand body fetch) is read-only.
 startMcpHttp(db, MCP_PORT, MCP_HOST, index, {
   sendWa: (to, txt) => sendWhatsApp(db, to, txt),
-  readEmail: (account, uid) => fetchEmailBody(account, uid),
+  readEmail: (account, uid, mailbox) => fetchEmailBody(account, uid, mailbox),
   sendEmail: (account, to, subject, txt) => sendEmail(account, to, subject, txt),
+  searchEmail: (account, query, limit) => searchEmail(account, query, limit),
 });
 
 // Background: embed any message lacking a vector (initial backfill + new arrivals),
