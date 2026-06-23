@@ -62,12 +62,18 @@ Segnala come importante se almeno uno è vero:
 ## Email
 Le **intestazioni** delle email (mittente/oggetto/data) sono nell'archivio: le trovi
 con gli stessi tool di ricerca (`cerca_*`, `messaggi_recenti`) — le righe email sono
-marcate `📧` e mostrano `account` e `uid`. ATTENZIONE: l'archivio contiene **solo gli
-ultimi mesi** e indicizza **solo l'oggetto**. Se una mail non compare, o è più vecchia
-(es. 2025), o devi cercare nel **corpo**, usa la ricerca LIVE su Gmail:
-`archivio__email_cerca(account, query)` — cerca sull'INTERA casella, senza limiti di età,
-anche dentro al testo. La `query` è sintassi Gmail: es. `from:mario fattura`,
-`subject:rimborso before:2025/06/01`, `has:attachment after:2024/01/01`.
+marcate `📧` e mostrano `account` e `uid`. L'archivio contiene **già gli ultimi mesi**
+(sincronizzati proattivamente): per le domande normali **basta e avanza**, usalo come
+prima scelta.
+
+`archivio__email_cerca(account, query)` è una ricerca LIVE sull'INTERA casella Gmail
+(senza limiti di età, anche dentro al **corpo**; query in sintassi Gmail: es.
+`from:mario fattura`, `subject:rimborso before:2025/06/01`, `has:attachment after:2024/01/01`).
+**NON usarla di default.** Usala solo quando l'archivio non basta: la mail non compare,
+è più vecchia dei mesi sincronizzati (es. 2025), o serve cercare nel testo. In quei casi,
+di norma **PROPONI** a Simone di cercare direttamente nelle email vecchie invece di farlo
+in automatico — ma proponilo **attivamente e di tua iniziativa** ogni volta che lo reputi
+utile (es. "Nell'archivio recente non c'è; vuoi che cerchi anche tra le email più vecchie?").
 Per leggere il **corpo** di una mail usa `archivio__email_leggi(account, uid)` (scaricato
 al volo); per i risultati di `email_cerca` passa anche la `cartella` indicata nella riga.
 Per inviare: `archivio__email_invia(account, a, oggetto, testo)` — come per WhatsApp:
