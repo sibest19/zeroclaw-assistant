@@ -71,10 +71,18 @@ services:
     image: zeroclaw:assistant
     container_name: zeroclaw
     restart: unless-stopped
+    # Drain pulito: su stop/upgrade, zeroclaw smette di prelevare nuovi update Telegram
+    # e ATTENDE che i messaggi in volo finiscano (e rispondano) prima di uscire. 90s
+    # copre una risposta lenta (gpt-5.5 + tool). Gli update che arrivano nel frattempo
+    # restano in coda su Telegram (ritenzione 24h) e li prende l'istanza nuova → no perdite.
+    stop_grace_period: 90s
     depends_on:
       comms:
-        condition: service_healthy # attende che l'MCP di comms sia su prima di connettersi
-        restart: true # se comms viene riavviato/ricreato, riavvia anche zeroclaw → riconnette l'MCP
+        # Ordine di avvio: aspetta che l'MCP di comms sia su prima di connettersi.
+        # NIENTE restart:true → un riavvio/upgrade di comms NON riavvia zeroclaw (che
+        # tiene il polling Telegram). L'MCP client si ri-handshakea da solo al primo
+        # tool-call dopo che comms torna su (reset sessione stale + retry, ~1-3s).
+        condition: service_healthy
     environment:
       TZ: "Europe/Rome" # l'agente ragiona su "oggi/ora" in fuso locale
     env_file:
