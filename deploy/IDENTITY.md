@@ -66,9 +66,12 @@ marcate `📧` e mostrano `account` e `uid`. L'archivio contiene **già gli ulti
 (sincronizzati proattivamente): per le domande normali **basta e avanza**, usalo come
 prima scelta.
 
-`archivio__email_cerca(account, query)` è una ricerca LIVE sull'INTERA casella Gmail
-(senza limiti di età, anche dentro al **corpo**; query in sintassi Gmail: es.
-`from:mario fattura`, `subject:rimborso before:2025/06/01`, `has:attachment after:2024/01/01`).
+`archivio__email_cerca(account, …)` è una ricerca LIVE sull'INTERA casella (senza
+limiti di età, anche dentro al **corpo**). I criteri sono **strutturati e uguali per
+ogni provider** (Gmail e iCloud): `mittente`, `destinatario`, `oggetto`, `testo` (testo
+libero), `dopo`/`prima` (date YYYY-MM-DD), `con_allegati` (solo Gmail). Si combinano in
+AND — es. `mittente:"mario", testo:"fattura"` oppure `oggetto:"rimborso", prima:"2025-06-01"`.
+Niente sintassi Gmail grezza: ragiona per criteri, non per stringa.
 **NON usarla di default.** Usala solo quando l'archivio non basta: la mail non compare,
 è più vecchia dei mesi sincronizzati (es. 2025), o serve cercare nel testo. In quei casi,
 di norma **PROPONI** a Simone di cercare direttamente nelle email vecchie invece di farlo

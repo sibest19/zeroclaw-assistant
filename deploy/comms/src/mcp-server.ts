@@ -19,6 +19,7 @@ import {
   type RevisionRow,
 } from "./db.js";
 import type { VectorIndex } from "./vector-index.js";
+import type { EmailQuery } from "./email.js";
 
 const HOURS = 3_600_000;
 
@@ -138,7 +139,7 @@ export type EmailSearchHit = {
 };
 export type SearchEmail = (
   account: string,
-  query: string,
+  query: EmailQuery,
   limit?: number,
 ) => Promise<EmailSearchHit[]>;
 
@@ -329,16 +330,52 @@ export function buildMcpServer(
       "email_cerca",
       {
         description:
-          "Ricerca LIVE su Gmail sull'INTERA casella (anche email vecchie di anni, NON solo quelle in archivio), cercando anche dentro al CORPO. Usala quando una mail non compare in archivio o è più vecchia del backfill. La query usa la sintassi di ricerca Gmail: es. `from:mario fattura`, `subject:rimborso before:2025/06/01`, `has:attachment after:2024/01/01`. Restituisce gli header; per il corpo poi usa email_leggi con account+uid+cartella indicati.",
+          "Ricerca LIVE sull'INTERA casella (anche email vecchie di anni, NON solo quelle in archivio), cercando anche dentro al CORPO. Usala quando una mail non compare in archivio o è più vecchia del backfill. Criteri strutturati e indipendenti dal provider (combinati in AND): mittente, oggetto, testo libero, intervallo di date. Es.: {mittente:'mario', testo:'fattura'} oppure {oggetto:'rimborso', prima:'2025-06-01'}. Funziona uguale su Gmail e iCloud (il filtro allegati vale solo su Gmail). Restituisce gli header; per il corpo poi usa email_leggi con account+uid+cartella indicati.",
         inputSchema: {
           account: z.string().describe("nome account (es. personal/work/cloud)"),
-          query: z.string().describe("query in sintassi di ricerca Gmail"),
+          mittente: z.string().optional().describe("filtra per mittente (from): nome o indirizzo"),
+          destinatario: z.string().optional().describe("filtra per destinatario (to)"),
+          oggetto: z.string().optional().describe("parole nell'oggetto"),
+          testo: z.string().optional().describe("testo libero cercato in header+corpo"),
+          dopo: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .optional()
+            .describe("solo email da questa data in poi (YYYY-MM-DD, inclusiva)"),
+          prima: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .optional()
+            .describe("solo email prima di questa data (YYYY-MM-DD, esclusiva)"),
+          con_allegati: z
+            .boolean()
+            .optional()
+            .describe("solo email con allegati (solo Gmail; ignorato su iCloud)"),
           limit: z.number().optional().describe("max risultati (default 30)"),
         },
       },
-      async ({ account, query, limit }) => {
-        const hits = await searchEmail(account, query, limit ?? 30);
-        if (!hits.length) return text(`Nessuna email trovata per: ${query}`);
+      async ({
+        account,
+        mittente,
+        destinatario,
+        oggetto,
+        testo,
+        dopo,
+        prima,
+        con_allegati,
+        limit,
+      }) => {
+        const q: EmailQuery = {
+          from: mittente,
+          to: destinatario,
+          subject: oggetto,
+          text: testo,
+          since: dopo ? new Date(`${dopo}T00:00:00`) : undefined,
+          before: prima ? new Date(`${prima}T00:00:00`) : undefined,
+          hasAttachment: con_allegati,
+        };
+        const hits = await searchEmail(account, q, limit ?? 30);
+        if (!hits.length) return text("Nessuna email trovata per i criteri indicati.");
         const lines = hits.map((h) => {
           const when = localTime(h.date);
           const subj = (h.subject ?? "").replace(/\s+/g, " ").slice(0, 200);

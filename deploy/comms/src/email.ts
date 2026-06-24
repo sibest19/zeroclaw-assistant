@@ -93,7 +93,10 @@ export async function startEmail(db: Database.Database): Promise<void> {
           if (first) log.info(`[email:${acc.name}] backfill done`);
           first = false;
         } catch (e: any) {
-          log.warn({ err: e?.message ?? String(e), code: e?.code, response: e?.response }, `[email:${acc.name}] sync failed`);
+          log.warn(
+            { err: e?.message ?? String(e), code: e?.code, response: e?.response },
+            `[email:${acc.name}] sync failed`,
+          );
         }
         await sleep(EMAIL_POLL_SECS * 1000);
       }
@@ -120,46 +123,144 @@ export interface EmailHit {
   date: number;
 }
 
-// Live search across the WHOLE mailbox (no archive, no age limit, searches the
-// body too). `query` is Gmail search syntax (from:, subject:, before:/after:,
-// has:attachment, free text…). UIDs are scoped to the All-Mail mailbox, so
-// fetchEmailBody must be called with the returned `mailbox`.
+// Provider-neutral search criteria. ZeroClaw speaks only this; the per-provider
+// translation (Gmail X-GM-RAW vs standard IMAP SEARCH) lives below. All fields
+// are ANDed; `text` is a free-text term matched against headers+body. `since`
+// is inclusive, `before` is exclusive (IMAP/Gmail semantics). `hasAttachment`
+// is honoured on Gmail and silently ignored where IMAP can't express it.
+export interface EmailQuery {
+  from?: string;
+  to?: string;
+  subject?: string;
+  text?: string;
+  since?: Date;
+  before?: Date;
+  hasAttachment?: boolean;
+}
+
+function hasCriteria(q: EmailQuery): boolean {
+  return Boolean(q.from || q.to || q.subject || q.text || q.since || q.before || q.hasAttachment);
+}
+
+// Live search across the WHOLE mailbox (no archive, no age limit, body included).
+// Takes provider-neutral criteria: on Gmail it builds an X-GM-RAW query over the
+// All-Mail mailbox; on other providers (e.g. iCloud) it runs standard IMAP SEARCH
+// across the selectable folders. Each hit carries its own `mailbox`, so
+// fetchEmailBody must be called with the returned value.
 export async function searchEmail(
   accountName: string,
-  query: string,
+  q: EmailQuery,
   limit = 30,
 ): Promise<EmailHit[]> {
   const acc = account(accountName);
+  if (!hasCriteria(q)) return []; // never run an unbounded "match everything" search
   return withImap(acc, async (client) => {
-    if (!client.capabilities.has("X-GM-EXT-1")) {
-      throw new Error("il server non supporta la ricerca Gmail (X-GM-EXT-1)");
+    return client.capabilities.has("X-GM-EXT-1")
+      ? gmailSearch(client, acc, q, limit)
+      : imapSearch(client, acc, q, limit);
+  });
+}
+
+// Build one EmailHit from a fetched message envelope.
+function hitFromEnvelope(acc: EmailAccount, mailbox: string, msg: any): EmailHit | null {
+  const env = msg.envelope;
+  if (!env) return null;
+  const from = env.from?.[0];
+  return {
+    account: acc.name,
+    uid: msg.uid,
+    mailbox,
+    from: from?.address ?? null,
+    fromName: from?.name ?? null,
+    subject: env.subject || "(senza oggetto)",
+    date: env.date ? new Date(env.date).getTime() : Date.now(),
+  };
+}
+
+const gmDate = (d: Date) => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+const gmQuote = (s: string) => (/\s/.test(s) ? `"${s}"` : s);
+
+// Translate neutral criteria into a Gmail X-GM-RAW query string.
+function toGmRaw(q: EmailQuery): string {
+  const parts: string[] = [];
+  if (q.from) parts.push(`from:${gmQuote(q.from)}`);
+  if (q.to) parts.push(`to:${gmQuote(q.to)}`);
+  if (q.subject) parts.push(`subject:${gmQuote(q.subject)}`);
+  if (q.hasAttachment) parts.push("has:attachment");
+  if (q.since) parts.push(`after:${gmDate(q.since)}`);
+  if (q.before) parts.push(`before:${gmDate(q.before)}`);
+  if (q.text) parts.push(q.text);
+  return parts.join(" ");
+}
+
+// Translate neutral criteria into an ImapFlow SEARCH object. `hasAttachment` has
+// no standard-IMAP equivalent and is dropped.
+function toImapCriteria(q: EmailQuery): Record<string, unknown> {
+  const c: Record<string, unknown> = {};
+  if (q.from) c.from = q.from;
+  if (q.to) c.to = q.to;
+  if (q.subject) c.subject = q.subject;
+  if (q.text) c.text = q.text;
+  if (q.since) c.since = q.since;
+  if (q.before) c.before = q.before;
+  return c;
+}
+
+// Gmail: full-mailbox, body-aware search via the X-GM-RAW extension.
+async function gmailSearch(
+  client: ImapFlow,
+  acc: EmailAccount,
+  q: EmailQuery,
+  limit: number,
+): Promise<EmailHit[]> {
+  const box = await allMailPath(client);
+  const lock = await client.getMailboxLock(box);
+  try {
+    const uids = (await client.search({ gmraw: toGmRaw(q) }, { uid: true })) || [];
+    if (!uids.length) return [];
+    const pick = uids.slice(-limit).reverse(); // newest first, capped
+    const hits: EmailHit[] = [];
+    for await (const msg of client.fetch(pick, { envelope: true }, { uid: true })) {
+      const h = hitFromEnvelope(acc, box, msg);
+      if (h) hits.push(h);
     }
-    const box = await allMailPath(client);
-    const lock = await client.getMailboxLock(box);
+    return hits;
+  } finally {
+    lock.release();
+  }
+}
+
+// Non-Gmail fallback: standard IMAP SEARCH over each selectable folder (skipping
+// Trash/Junk/Drafts), merged newest-first and capped.
+async function imapSearch(
+  client: ImapFlow,
+  acc: EmailAccount,
+  q: EmailQuery,
+  limit: number,
+): Promise<EmailHit[]> {
+  const criteria = toImapCriteria(q);
+  if (!Object.keys(criteria).length) return []; // only hasAttachment was set
+  const skip = new Set(["\\Trash", "\\Junk", "\\Drafts"]);
+  const boxes = (await client.list()).filter(
+    (b) => !b.flags?.has("\\Noselect") && !(b.specialUse && skip.has(b.specialUse)),
+  );
+  const hits: EmailHit[] = [];
+  for (const box of boxes) {
+    const lock = await client.getMailboxLock(box.path);
     try {
-      const uids = (await client.search({ gmraw: query }, { uid: true })) || [];
-      if (!uids.length) return [];
-      const pick = uids.slice(-limit).reverse(); // newest first, capped
-      const hits: EmailHit[] = [];
+      const uids = (await client.search(criteria as any, { uid: true })) || [];
+      if (!uids.length) continue;
+      const pick = uids.slice(-limit).reverse();
       for await (const msg of client.fetch(pick, { envelope: true }, { uid: true })) {
-        const env = msg.envelope;
-        if (!env) continue;
-        const from = env.from?.[0];
-        hits.push({
-          account: acc.name,
-          uid: msg.uid,
-          mailbox: box,
-          from: from?.address ?? null,
-          fromName: from?.name ?? null,
-          subject: env.subject || "(senza oggetto)",
-          date: env.date ? new Date(env.date).getTime() : Date.now(),
-        });
+        const h = hitFromEnvelope(acc, box.path, msg);
+        if (h) hits.push(h);
       }
-      return hits;
     } finally {
       lock.release();
     }
-  });
+  }
+  hits.sort((a, b) => b.date - a.date);
+  return hits.slice(0, limit);
 }
 
 // On-demand: fetch + parse the full body of one message (NOT stored). `mailbox`
