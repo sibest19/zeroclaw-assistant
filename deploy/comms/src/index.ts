@@ -1,12 +1,18 @@
 // comms entrypoint (always-on service): WhatsApp + email ingestion + MCP server +
 // background embedding loop (keeps the semantic index up to date).
-import { openDb, getUnembedded, storeEmbeddings, backfillChatNames } from "./db.js";
+import {
+  openDb,
+  getUnembedded,
+  storeEmbeddings,
+  backfillChatNames,
+  purgeEmailAccountsNotIn,
+} from "./db.js";
 import { startWhatsApp, sendWhatsApp } from "./whatsapp.js";
 import { startEmail, fetchEmailBody, sendEmail, searchEmail } from "./email.js";
 import { startMcpHttp } from "./mcp-server.js";
 import { VectorIndex } from "./vector-index.js";
 import { initEmbedder, embedPassages, vecToBlob } from "./embeddings.js";
-import { ARCHIVE_DB } from "./config.js";
+import { ARCHIVE_DB, EMAIL_ACCOUNTS } from "./config.js";
 
 const MCP_PORT = Number(process.env.MCP_PORT ?? 8765);
 const MCP_HOST = process.env.MCP_HOST ?? "127.0.0.1";
@@ -20,6 +26,17 @@ console.log(`archive: ${ARCHIVE_DB}`);
 // Backfill 1:1 chat names from existing incoming messages (group names come from
 // groupFetchAllParticipating on WhatsApp connect).
 console.log(`backfilled ${backfillChatNames(db)} 1:1 chat name(s)`);
+
+// Drop email archived under an account name that's no longer configured (renamed
+// or removed): wipes its rows + embeddings + refs so the new name starts fresh.
+// Runs BEFORE the vector index loads, so orphan vectors never enter memory.
+if (EMAIL_ACCOUNTS.length) {
+  const purged = purgeEmailAccountsNotIn(
+    db,
+    EMAIL_ACCOUNTS.map((a) => a.name),
+  );
+  if (purged) console.log(`purged ${purged} email row(s) from renamed/removed account(s)`);
+}
 
 const index = new VectorIndex(db);
 index.load();

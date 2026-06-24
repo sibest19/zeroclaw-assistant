@@ -349,7 +349,9 @@ export function revisionsForMessage(
        FROM message_revisions WHERE message_rowid = ?
        ORDER BY changed_at ASC, id ASC`,
     )
-    .all(messageRowid) as Array<Pick<RevisionRow, "kind" | "prev_body" | "new_body" | "changed_at">>;
+    .all(messageRowid) as Array<
+    Pick<RevisionRow, "kind" | "prev_body" | "new_body" | "changed_at">
+  >;
 }
 
 // Recent edits & deletions across all chats (audit feed), most recent first.
@@ -559,4 +561,39 @@ export function messagesByRowids(db: Database.Database, rowids: number[]): Messa
   return db
     .prepare(`SELECT * FROM messages WHERE rowid IN (${ph})`)
     .all(...rowids) as unknown as MessageRow[];
+}
+
+// Drop every email row attributed (in raw_json.account) to an account name that is
+// no longer configured — i.e. an account that was renamed or removed. This wipes
+// the rows, their embeddings (no FK), and any now-empty email chats; the FTS index
+// and message_revisions clean themselves (DELETE trigger + ON DELETE CASCADE). The
+// surviving accounts keep their data; the renamed one re-backfills fresh under its
+// new name. Returns the number of message rows purged. No-op if `keep` is empty
+// (guards against wiping all email when the config is momentarily unparsed/disabled).
+export function purgeEmailAccountsNotIn(db: Database.Database, keep: string[]): number {
+  if (keep.length === 0) return 0;
+  const ph = keep.map(() => "?").join(",");
+  const rowids = (
+    db
+      .prepare(
+        `SELECT rowid FROM messages
+         WHERE source = 'email'
+           AND json_extract(raw_json, '$.account') IS NOT NULL
+           AND json_extract(raw_json, '$.account') NOT IN (${ph})`,
+      )
+      .all(...keep) as Array<{ rowid: number }>
+  ).map((r) => r.rowid);
+  if (rowids.length === 0) return 0;
+  const rph = rowids.map(() => "?").join(",");
+  db.transaction(() => {
+    db.prepare(`DELETE FROM embeddings WHERE rowid IN (${rph})`).run(...rowids);
+    db.prepare(`DELETE FROM messages WHERE rowid IN (${rph})`).run(...rowids);
+    // Remove email chats that no longer have any message (re-created on re-backfill).
+    db.prepare(
+      `DELETE FROM chats
+       WHERE source = 'email'
+         AND chat_id NOT IN (SELECT DISTINCT chat_id FROM messages WHERE source = 'email')`,
+    ).run();
+  })();
+  return rowids.length;
 }
