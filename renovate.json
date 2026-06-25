@@ -1,0 +1,32 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard", ":semanticCommits"],
+  "timezone": "Europe/Rome",
+  "schedule": ["before 6am on monday"],
+  "labels": ["dependencies"],
+  "git-submodules": { "enabled": true },
+  "lockFileMaintenance": { "enabled": true, "schedule": ["before 6am on monday"] },
+  "vulnerabilityAlerts": { "labels": ["security"] },
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    {
+      "description": "Automerge low-risk updates once CI (docker-publish on PR) is green: patch/minor, dev deps, Docker digest pins, lockfile refresh.",
+      "matchUpdateTypes": ["patch", "minor", "pin", "digest", "lockFileMaintenance"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Major bumps always go through a PR for manual review (e.g. nodemailer/pino/@types/node).",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "addLabels": ["major"]
+    },
+    {
+      "description": "vendor/zeroclaw is hand-pinned and bumped only after local testing (deploy/MAINTENANCE.md): always PR, never automerge, not schedule-bound. Keep this rule LAST so it overrides the digest-automerge above for submodule commits.",
+      "matchManagers": ["git-submodules"],
+      "automerge": false,
+      "schedule": ["at any time"],
+      "addLabels": ["submodule", "needs-manual-test"]
+    }
+  ]
+}
