@@ -23,7 +23,7 @@
     "express": "^5.2.1",
     "imapflow": "^1.4.0",
     "mailparser": "^3.9.9",
-    "nodemailer": "^8.0.11",
+    "nodemailer": "^9.0.1",
     "pino": "^9.5.0",
     "qrcode-terminal": "^0.12.0",
     "zod": "^4.4.3"
