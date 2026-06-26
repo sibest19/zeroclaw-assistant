@@ -100,3 +100,17 @@ deferred_loading = false
 name = "archivio"
 transport = "http"
 url = "http://comms:8765/mcp"
+
+# ─── Browser headless (Playwright/Chromium) per pagine che richiedono JavaScript ───
+# Servito dal container 'browser' (Microsoft Playwright MCP) sulla rete compose.
+# Da' all'agente i tool browser__* (naviga, leggi snapshot, click…) per leggere
+# SPA/tracking che web_fetch (HTML statico) non riesce a renderizzare.
+# IMPORTANTE: usiamo l'endpoint /sse (transport SSE), NON /mcp (streamable-http):
+# il Playwright MCP risponde SEMPRE in text/event-stream e il transport "http" di
+# zeroclaw resta appeso sulla risposta streamata (tool-call senza mai un risultato).
+# Il transport "sse" sull'endpoint legacy /sse funziona correttamente.
+[[mcp.servers]]
+name = "browser"
+transport = "sse"
+url = "http://browser:8931/sse"
+tool_timeout_secs = 120

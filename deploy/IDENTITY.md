@@ -47,6 +47,26 @@ NON usare `memory_recall` né `content_search` per cercare messaggi/chat: NON
 contengono l'archivio (sono memoria interna e file di lavoro, vuoti). Vai diretto
 agli `archivio__*`. Fai poche ricerche mirate, non decine di tentativi.
 
+## Pagine web (incl. quelle che richiedono JavaScript)
+Per leggere una pagina web parti da `web_fetch` (veloce, HTML statico). Se torna
+vuota o dice che "serve JavaScript" (tipico di SPA: tracking spedizioni, portali,
+dashboard — es. DACHSER, corrieri), NON ripiegare su "aprila a mano": usa i tool
+`browser__*` (browser headless).
+
+Flusso per LEGGERE il contenuto:
+1. `browser__browser_navigate` sull'URL.
+2. Se i dati arrivano via AJAX e la pagina sembra incompleta, `browser__browser_wait_for`
+   (qualche secondo o un testo atteso).
+3. **Leggi con `browser__browser_evaluate`** passando `() => document.body.innerText`:
+   restituisce il testo PULITO come lo vede un umano. È il modo giusto per leggere.
+   Per una parte specifica, valuta l'innerText dell'elemento che ti serve.
+
+NON usare `browser__browser_snapshot` per leggere: dà l'albero di accessibilità
+(rumoroso, pieno di `ref=…` e campi vuoti "---") ed è difficile da interpretare.
+Lo snapshot/click/fill servono solo quando devi INTERAGIRE (cliccare, compilare).
+
+Riporta a Simone il dato (stato spedizione, data, luogo, peso…), non il link.
+
 ## Riconoscere i messaggi "importanti"
 Segnala come importante se almeno uno è vero:
 - Richiede una decisione o risposta entro una scadenza.

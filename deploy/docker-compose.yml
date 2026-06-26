@@ -62,6 +62,42 @@ services:
       retries: 5
       start_period: 40s # primo avvio: può scaricare il modello
 
+  # Browser headless (Playwright + Chromium) esposto come MCP server HTTP su /mcp.
+  # Dà a zeroclaw i tool browser__* per leggere pagine che richiedono JavaScript
+  # (SPA, tracking spedizioni…) che web_fetch (HTML statico) non renderizza.
+  # --isolated = profilo in RAM (niente volume); --no-sandbox = obbligatorio in container.
+  # Nessuna porta pubblicata: raggiungibile solo da zeroclaw sulla rete compose.
+  browser:
+    image: mcr.microsoft.com/playwright/mcp:latest
+    container_name: zeroclaw-browser
+    restart: unless-stopped
+    init: true
+    entrypoint: ["node"]
+    command:
+      - /app/cli.js
+      - --headless
+      - --browser=chromium
+      - --no-sandbox
+      - --isolated
+      - --port=8931
+      - --host=0.0.0.0
+      # Senza questo, il server rifiuta (403) le richieste il cui Host non è quello
+      # di bind: zeroclaw/comms si connettono a http://browser:8931 → Host "browser:8931".
+      - --allowed-hosts=browser:8931,localhost:8931
+    healthcheck:
+      # Il server MCP ascolta su 8931: basta il TCP up perché zeroclaw registri i tool.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('net').connect(8931,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   zeroclaw:
     # Build dal submodule upstream (vendor/zeroclaw, pinnato) col NOSTRO Dockerfile.
     # Nessuna modifica all'upstream. Aggiornare = bump del submodule.
@@ -82,6 +118,12 @@ services:
         # NIENTE restart:true → un riavvio/upgrade di comms NON riavvia zeroclaw (che
         # tiene il polling Telegram). L'MCP client si ri-handshakea da solo al primo
         # tool-call dopo che comms torna su (reset sessione stale + retry, ~1-3s).
+        condition: service_healthy
+      browser:
+        # Idem: il browser MCP dev'essere su all'avvio, altrimenti i tool browser__*
+        # non vengono registrati (connect_all salta i server down al boot). A runtime
+        # un riavvio del browser si auto-ripara al primo tool-call (sessione stale).
+        # No restart:true: un bounce del browser non riavvia zeroclaw.
         condition: service_healthy
     environment:
       TZ: "Europe/Rome" # l'agente ragiona su "oggi/ora" in fuso locale
