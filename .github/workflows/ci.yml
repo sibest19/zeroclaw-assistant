@@ -1,0 +1,53 @@
+name: ci
+
+# Fast PR gate (typecheck + format + compose validation) so it's easy to decide
+# when to merge. Complements docker-publish.yml, which does the heavier image
+# build on PRs. Mark these jobs as required checks in branch protection so PRs
+# (incl. Renovate dependency bumps) can't merge red.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  comms:
+    name: comms · typecheck + format
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/comms
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: deploy/comms/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Format check
+        run: npm run format:check
+      - name: Audit (high+, informational)
+        run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true
+
+  compose:
+    name: compose · config valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker-compose.yml
+        working-directory: deploy
+        run: |
+          touch .env            # env_file: [.env] must exist for `config` to parse
+          docker compose config -q
+          echo "docker-compose.yml OK"
