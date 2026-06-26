@@ -26,6 +26,7 @@ on:
       - "deploy/comms/**"
       - "deploy/transcriber/**"
       - "Dockerfile.zeroclaw"
+      - "vendor/zeroclaw" # submodule pointer bump (build-only on PR, e.g. Renovate)
       - ".github/workflows/docker-publish.yml"
   workflow_dispatch:
 
