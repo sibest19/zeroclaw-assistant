@@ -4,7 +4,7 @@
 # full-source build of just the binary. `--bin zeroclaw` skips the GUI/aux apps
 # (tauri, zerocode) and examples, so no stubbing is needed; all workspace
 # manifests + locales.toml are present in the full context.
-FROM rust:1.96-slim AS builder
+FROM rust:1.97-slim AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
