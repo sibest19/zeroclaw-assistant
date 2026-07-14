@@ -1,6 +1,6 @@
 # Local ASR microservice: parakeet-tdt-0.6b-v3 via NVIDIA NeMo (CPU).
 # Multilingual (incl. Italian). Exposes POST /transcribe (raw audio bytes -> text).
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 # ffmpeg: decode WhatsApp voice notes (OPUS/OGG) -> wav. libsndfile1: NeMo audio I/O.
 RUN apt-get update && apt-get install -y --no-install-recommends \
