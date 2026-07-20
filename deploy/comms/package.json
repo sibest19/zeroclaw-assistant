@@ -37,6 +37,6 @@
     "@types/qrcode-terminal": "^0.12.2",
     "prettier": "^3.8.4",
     "tsx": "^4.19.0",
-    "typescript": "^6.0.0"
+    "typescript": "^7.0.0"
   }
 }
