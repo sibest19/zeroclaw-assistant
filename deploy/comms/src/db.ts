@@ -52,8 +52,7 @@ function columnExists(db: Database.Database, table: string, col: string): boolea
 
 function ftsHasDiacritics(db: Database.Database): boolean {
   const row = db.prepare("SELECT sql FROM sqlite_master WHERE name='messages_fts'").get() as
-    | { sql: string }
-    | undefined;
+    { sql: string } | undefined;
   return !!row && /remove_diacritics/.test(row.sql);
 }
 
@@ -311,8 +310,7 @@ export function markDeleted(
   const row = db
     .prepare("SELECT rowid, body, deleted_at FROM messages WHERE source = ? AND ext_id = ?")
     .get(source, extId) as
-    | { rowid: number; body: string | null; deleted_at: number | null }
-    | undefined;
+    { rowid: number; body: string | null; deleted_at: number | null } | undefined;
   if (!row || row.deleted_at != null) return false;
   db.transaction(() => {
     db.prepare(
@@ -416,8 +414,7 @@ export function backfillChatNames(db: Database.Database): number {
 // Resolved display name for a chat (or null).
 export function chatName(db: Database.Database, chatId: string): string | null {
   const row = db.prepare("SELECT name FROM chats WHERE chat_id = ?").get(chatId) as
-    | { name: string | null }
-    | undefined;
+    { name: string | null } | undefined;
   return row?.name ?? null;
 }
 
