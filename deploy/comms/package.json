@@ -19,7 +19,7 @@
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "@whiskeysockets/baileys": "^6.7.16",
-    "better-sqlite3": "^12.10.0",
+    "better-sqlite3": "^13.0.0",
     "express": "^5.2.1",
     "imapflow": "^1.4.0",
     "mailparser": "^3.9.9",
